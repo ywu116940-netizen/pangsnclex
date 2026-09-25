@@ -24,6 +24,9 @@ class SupabaseStore:
 
     def __init__(self):
         self.url = os.environ.get('SUPABASE_URL', '').strip().rstrip('/')
+        for suffix in ('/rest/v1', '/storage/v1'):
+            if self.url.endswith(suffix):
+                self.url = self.url[:-len(suffix)]
         self.key = ''.join(os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '').split())
         self.bucket = os.environ.get('SUPABASE_STORAGE_BUCKET', 'study-materials').strip()
         if not self.url or not self.key:
