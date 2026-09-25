@@ -476,9 +476,20 @@ class HikariQuizGenerator:
                 raise ValueError('Every question needs source evidence.')
             inferred: set[str] = set()
             for quote in evidence:
+                if quote.sourceId == '__infer__':
+                    matches = [
+                        (source_id, self._canonical_quote(source_text, quote.quote))
+                        for source_id, source_text in source_map.items()
+                    ]
+                    matches = [(source_id, canonical) for source_id, canonical in matches if canonical is not None]
+                    if len(matches) != 1:
+                        raise ValueError('Question evidence could not be assigned to exactly one selected source.')
+                    quote.sourceId, canonical = matches[0]
+                else:
+                    canonical = None
                 if quote.sourceId not in source_map:
                     raise ValueError(f"Question evidence was not assigned to source '{quote.sourceId}'.")
-                canonical = self._canonical_quote(source_map[quote.sourceId], quote.quote)
+                canonical = canonical or self._canonical_quote(source_map[quote.sourceId], quote.quote)
                 if canonical is None:
                     raise ValueError(f"Question evidence was not found in source '{quote.sourceId}'.")
                 quote.quote = canonical
@@ -537,7 +548,6 @@ class HikariQuizGenerator:
     def _call_structured(self, name: str, system_prompt: str, user_prompt: str, model_type: type[BaseModel], max_output_tokens: int) -> BaseModel:
         schema = model_type.model_json_schema(); self._make_schema_strict(schema)
         last_error: Exception | None = None
-        last_structured: Any = None
         for attempt in range(3):
             retry_note = '' if attempt == 0 else '\n\nPrevious output failed local schema validation. Correct the JSON and return the complete schema, with no prose.'
             payload = {'model': self.model, 'input': [{'role': 'system', 'content': [{'type': 'input_text', 'text': system_prompt}]}, {'role': 'user', 'content': [{'type': 'input_text', 'text': user_prompt + retry_note}]}], 'temperature': 0.1, 'max_output_tokens': max_output_tokens, 'text': {'format': {'type': 'json_schema', 'name': name, 'strict': True, 'schema': schema}}}
@@ -546,15 +556,8 @@ class HikariQuizGenerator:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     response_data = json.loads(response.read())
                 structured = json.loads(self._response_text(response_data))
-                last_structured = structured
-                # Hikari currently returns the quiz array under `questions` even
-                # when the supplied strict schema names the field `items`.
-                # Normalise only this known top-level provider alias, then keep
-                # Pydantic's strict validation for every question and field.
-                if model_type is QuizResponse and isinstance(structured, dict) and 'items' not in structured:
-                    questions = structured.pop('questions', None)
-                    if isinstance(questions, list):
-                        structured['items'] = questions
+                if model_type is QuizResponse:
+                    structured = self._normalise_quiz_payload(structured)
                 return model_type.model_validate(structured)
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode(errors='replace')[:800]
@@ -564,9 +567,120 @@ class HikariQuizGenerator:
             except (json.JSONDecodeError, ValidationError) as exc:
                 last_error = exc
         detail = str(last_error).replace('\n', ' ')[:500] if last_error else 'unknown schema error'
-        if model_type is QuizResponse and last_structured is not None:
-            detail += ' Provider payload: ' + json.dumps(last_structured, ensure_ascii=False)[:6000]
         raise ValueError(f'Hikari {name} failed schema validation after 3 attempts: {detail}') from last_error
+
+    @classmethod
+    def _normalise_quiz_payload(cls, payload: Any) -> Any:
+        """Translate Hikari's documented quiz shape into the local strict schema."""
+        if not isinstance(payload, dict):
+            return payload
+        payload = dict(payload)
+        if 'items' not in payload and isinstance(payload.get('questions'), list):
+            payload['items'] = payload.pop('questions')
+        raw_items = payload.get('items')
+        if not isinstance(raw_items, list):
+            return payload
+        items: list[Any] = []
+        for raw in raw_items:
+            if not isinstance(raw, dict):
+                items.append(raw); continue
+            if {'stem', 'correctIndex', 'correctRationale', 'stemEvidence', 'optionRationales'}.issubset(raw):
+                items.append(raw); continue
+            raw_options = raw.get('options') if isinstance(raw.get('options'), list) else []
+            option_texts: list[str] = []
+            option_ids: list[str] = []
+            for index, option in enumerate(raw_options):
+                if isinstance(option, dict):
+                    option_texts.append(str(option.get('text') or option.get('label') or '').strip())
+                    option_ids.append(str(option.get('id') or chr(65 + index)).strip())
+                else:
+                    option_texts.append(str(option).strip())
+                    option_ids.append(chr(65 + index))
+            correct_index = cls._provider_correct_index(raw.get('correctIndex', raw.get('correctAnswer')), option_ids, option_texts)
+            evidence_values = raw.get('evidenceQuotes') or raw.get('evidence') or raw.get('sourceEvidence') or []
+            if not isinstance(evidence_values, list):
+                evidence_values = [evidence_values]
+            evidence: list[dict[str, str]] = []
+            for entry in evidence_values:
+                if isinstance(entry, dict):
+                    quote = str(entry.get('quote') or entry.get('text') or '').strip()
+                    source_id = str(entry.get('sourceId') or entry.get('source_id') or '__infer__').strip()
+                else:
+                    quote = str(entry).strip(); source_id = '__infer__'
+                if quote:
+                    evidence.append({'quote': quote, 'sourceId': source_id})
+            rationale = str(raw.get('correctRationale') or raw.get('rationale') or '').strip()
+            primary_section = str(raw.get('primarySectionId') or '').strip()
+            section_ids = raw.get('sectionIds') if isinstance(raw.get('sectionIds'), list) else []
+            if primary_section and primary_section not in section_ids:
+                section_ids = [primary_section, *section_ids]
+            category = str(raw.get('category') or '').strip()
+            if category not in CATEGORIES:
+                category = cls._infer_category(str(raw.get('question') or raw.get('stem') or ''))
+            concept_source = ''
+            if evidence:
+                # Hikari places the correct-answer evidence first, followed by
+                # supporting distractor evidence; it does not order quotes by
+                # the A/B/C/D option indexes.
+                concept_source = evidence[0]['quote']
+            concept = str(raw.get('concept') or raw.get('topic') or '').strip() or cls._concept_from_text(concept_source or str(raw.get('question') or ''))
+            option_rationales = []
+            for index, option in enumerate(option_texts):
+                option_evidence = evidence
+                if index == correct_index:
+                    explanation = rationale
+                elif rationale:
+                    explanation = rationale
+                else:
+                    explanation = f'{option} is not supported as the best answer by the supplied lecture evidence.'
+                option_rationales.append({'optionIndex': index, 'explanation': explanation, 'evidence': option_evidence})
+            items.append({
+                'mode': str(raw.get('mode') or 'clinical'),
+                'category': category,
+                'stem': str(raw.get('stem') or raw.get('question') or '').strip(),
+                'options': option_texts,
+                'correctIndex': correct_index,
+                'concept': concept,
+                'correctRationale': rationale,
+                'stemEvidence': evidence,
+                'optionRationales': option_rationales,
+                'primarySectionId': primary_section,
+                'sectionIds': [str(value) for value in section_ids if str(value).strip()],
+            })
+        return {'items': items}
+
+    @staticmethod
+    def _provider_correct_index(value: Any, option_ids: list[str], option_texts: list[str]) -> int:
+        if isinstance(value, int):
+            return value
+        answer = str(value or '').strip().casefold()
+        for index, option_id in enumerate(option_ids):
+            if answer == option_id.casefold():
+                return index
+        for index, text in enumerate(option_texts):
+            if answer == text.casefold():
+                return index
+        return -1
+
+    @staticmethod
+    def _infer_category(stem: str) -> str:
+        value = stem.casefold()
+        if any(word in value for word in ('first', 'priority', 'immediate', 'most important')):
+            return 'PRIORITY ASSESSMENT'
+        if any(word in value for word in ('teaching', 'understanding', 'intervention', 'instruction')):
+            return 'PATIENT EDUCATION & SAFETY'
+        return 'PHYSICAL ASSESSMENT & CUE MAPPING'
+
+    @staticmethod
+    def _concept_from_text(value: str) -> str:
+        value = value.strip()
+        for separator in ('|', ':', ' — ', ' - '):
+            if separator in value:
+                candidate = value.split(separator, 1)[0].strip()
+                if candidate:
+                    return candidate[:120]
+        words = value.split()
+        return ' '.join(words[:12])[:120] or 'Lecture concept'
 
     @staticmethod
     def _response_text(response: dict[str, Any]) -> str:
