@@ -121,7 +121,6 @@ class CompactQuestion(BaseModel):
     correctIndex: int = Field(ge=0, le=3)
     optionRationales: list[str] = Field(min_length=4, max_length=4)
     evidenceQuotes: list[str] = Field(min_length=1, max_length=12)
-    primarySectionId: str = Field(min_length=1)
 
     @field_validator('category')
     @classmethod
@@ -164,10 +163,11 @@ Write only defensible questions grounded in the supplied lecture chunks. Never u
 medical facts, even if generally true. Use a balanced mix of PRIORITY ASSESSMENT, PATIENT
 EDUCATION & SAFETY, and PHYSICAL ASSESSMENT & CUE MAPPING. Do not write SATA questions.
 Each question must have four distinct options, one best answer, exactly four option rationales
-in A-D order, exact evidence quotes copied from the supplied chunks, and the primarySectionId
-used. Put evidence quotes only once at question level; the backend attaches them to the validated
-rationale objects and derives the correct rationale and concept. Use different concepts and
-question angles within a batch. Keep wording concise and return one complete JSON object only."""
+in A-D order, and exact evidence quotes copied from the supplied chunks. Follow sectionQuotas by
+grounding each question's evidence in its assigned section; the backend derives primarySectionId,
+the correct rationale, and the concept from the validated evidence. Put evidence quotes only once
+at question level. Use different concepts and question angles within a batch. Keep wording concise
+and return one complete JSON object only."""
 
 
 EXTRACTOR_PROMPT = """You are a medical-document extraction editor. Convert the supplied source
@@ -506,6 +506,11 @@ class HikariQuizGenerator:
         errors: list[str] = []
         remaining = self._remaining_quotas(plan.section_quotas, [])
         for index, item in enumerate(items, 1):
+            try:
+                self._assign_question_sections(item, plan, remaining)
+            except ValueError as exc:
+                errors.append(f'Question {index}: {exc}')
+                continue
             if item.primarySectionId not in remaining or remaining[item.primarySectionId] <= 0:
                 errors.append(f'Question {index}: section quota exceeded or unknown primarySectionId.')
                 continue
@@ -517,6 +522,20 @@ class HikariQuizGenerator:
             except (ValueError, ValidationError) as exc:
                 errors.append(f'Question {index}: {exc}')
         return accepted, errors
+
+    def _assign_question_sections(self, item: Question, plan: BatchPlan, remaining: dict[str, int]) -> None:
+        """Derive section metadata from exact evidence instead of model-generated IDs."""
+        scores: dict[str, int] = {}
+        for evidence in item.stemEvidence:
+            for chunk in plan.chunks:
+                if self._canonical_quote(self._chunk_text(chunk), evidence.quote) is not None:
+                    section_id = chunk['sectionId']
+                    scores[section_id] = scores.get(section_id, 0) + 1
+        eligible = [section_id for section_id in plan.section_quotas if scores.get(section_id) and remaining.get(section_id, 0) > 0]
+        if not eligible:
+            raise ValueError('Question evidence does not match a section with remaining coverage quota.')
+        item.primarySectionId = max(eligible, key=lambda section_id: (scores[section_id], remaining[section_id]))
+        item.sectionIds = [section_id for section_id in plan.section_quotas if scores.get(section_id)]
 
     @staticmethod
     def _compact_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
@@ -555,8 +574,8 @@ class HikariQuizGenerator:
                 )
                 for index in range(4)
             ],
-            primarySectionId=item.primarySectionId,
-            sectionIds=[item.primarySectionId],
+            primarySectionId='__infer_section__',
+            sectionIds=[],
         )
 
     def _validate_batch(self, items: list[Question], plan: BatchPlan, existing: list[Question]) -> None:
@@ -847,7 +866,6 @@ class HikariQuizGenerator:
                 if quote and quote not in evidence:
                     evidence.append(quote)
             rationale = str(raw.get('correctRationale') or raw.get('rationale') or '').strip()
-            primary_section = str(raw.get('primarySectionId') or '').strip()
             category = str(raw.get('category') or '').strip()
             if category not in CATEGORIES:
                 category = cls._infer_category(str(raw.get('question') or raw.get('stem') or ''))
@@ -872,7 +890,6 @@ class HikariQuizGenerator:
                 'correctIndex': correct_index,
                 'optionRationales': option_rationales,
                 'evidenceQuotes': evidence,
-                'primarySectionId': primary_section,
             })
         return {'questions': items}
 
