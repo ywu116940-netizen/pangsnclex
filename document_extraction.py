@@ -47,7 +47,7 @@ KEY_TERM_NON_NOUN_WORDS = {
     'can', 'cause', 'causes', 'change', 'changes', 'describe', 'described',
     'decrease', 'decreased', 'gains', 'go', 'goes', 'include', 'includes',
     'lose', 'loses', 'may', 'need', 'occur', 'occurs', 'provide', 'reports',
-    'indicate', 'indicates', 'report', 'should', 'show', 'shows', 'use', 'used', 'when', 'with',
+    'affect', 'affects', 'indicate', 'indicates', 'report', 'should', 'show', 'shows', 'use', 'used', 'when', 'with',
 }
 KEY_TERM_MEDICAL_SUFFIXES = (
     'algia', 'emia', 'itis', 'osis', 'pathy', 'penia', 'plegia', 'uria',
@@ -83,15 +83,17 @@ def extract_key_terms(text: str, limit: int = 12) -> list[str]:
     if not text or not text.strip():
         return []
     candidates: list[tuple[float, str, str, bool]] = []
-    raw_tokens = _key_term_tokens(text)
-    if not raw_tokens:
-        return []
-
     # Keep sentence/header boundaries so a phrase cannot be assembled from unrelated text.
     spans = [span.strip() for span in re.split(r'(?<=[.!?:])\s+|\n+', text) if span.strip()]
     for span in spans:
         words = _key_term_tokens(span)
         normalized = [_lemma_key_term(word) for word in words]
+        heading_like = (
+            len(words) <= 8
+            and not re.search(r'[.!?]', span)
+            and not any(word in KEY_TERM_NON_NOUN_WORDS for word in normalized)
+            and not any(word in KEY_TERM_GENERIC_WORDS for word in normalized)
+        )
         for size in range(min(5, len(words)), 1, -1):
             for index in range(len(words) - size + 1):
                 original_words = words[index:index + size]
@@ -107,7 +109,9 @@ def extract_key_terms(text: str, limit: int = 12) -> list[str]:
                 normalized_term = ' '.join(term_words)
                 original_term = ' '.join(original_words)
                 medical_hits = sum(any(word.endswith(suffix) or suffix in word for suffix in KEY_TERM_MEDICAL_SUFFIXES) for word in content_words)
-                heading_bonus = 5 if all(word[:1].isupper() for word in original_words if word) else 0
+                heading_bonus = 5 if heading_like and size == len(words) else 0
+                if not medical_hits and not heading_bonus:
+                    continue
                 score = size * 2 + len(content_words) + medical_hits * 4 + heading_bonus
                 candidates.append((score, normalized_term, original_term, False))
 
