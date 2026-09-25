@@ -544,7 +544,16 @@ class HikariQuizGenerator:
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     response_data = json.loads(response.read())
-                return model_type.model_validate(json.loads(self._response_text(response_data)))
+                structured = json.loads(self._response_text(response_data))
+                # Hikari currently returns the quiz array under `questions` even
+                # when the supplied strict schema names the field `items`.
+                # Normalise only this known top-level provider alias, then keep
+                # Pydantic's strict validation for every question and field.
+                if model_type is QuizResponse and isinstance(structured, dict) and 'items' not in structured:
+                    questions = structured.pop('questions', None)
+                    if isinstance(questions, list):
+                        structured['items'] = questions
+                return model_type.model_validate(structured)
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode(errors='replace')[:800]
                 raise ValueError(f'Hikari {name} request failed ({exc.code}): {detail}') from exc
