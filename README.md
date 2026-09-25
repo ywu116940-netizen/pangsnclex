@@ -92,6 +92,15 @@ export STUDYWELL_MODEL="gpt-5.6-sol"
 .python312/bin/python3 server.py --port 4173
 ```
 
+可选的题目生成调节变量（Render 上不设置也可以使用默认值）：
+
+```text
+QUIZ_MAX_COUNT=100
+QUIZ_BATCH_SIZE=10
+QUIZ_MAX_CONCURRENCY=4
+QUIZ_BATCH_RETRIES=2
+```
+
 如果 Hikari API key 已设置在 `OPENAI_API_KEY`，服务也会读取该变量。题目要求 JSON Schema 输出，校验选项、单选题类别及逐字原文证据；任何引用与所选材料不匹配的结果都会被拒绝。所选学习材料会发送给 Hikari 生成题目。AI 题目仍应对照可靠护理教材复核，不替代权威 NCLEX 备考资料。
 
 ## Supabase shared modules
@@ -108,12 +117,14 @@ The browser never receives the service-role key. The Python backend stores modul
 
 Because automatic table exposure was disabled during project setup, manually expose `public.modules` in Supabase under `Project Settings -> Data API -> Exposed schemas and tables` (or the equivalent `Data API` table exposure screen). Keep the Storage bucket private.
 
-题目生成采用两阶段链式 workflow：
+题目生成现在采用分块、批量 workflow：
 
-1. `Extractor` 调用先处理原始学习材料，输出严格 JSON，包括 `coreConcepts`、`keyTerms`、`clinicalFacts` 和原文 `sourceQuotes`。它会清理 OCR 噪声、重复词和泛化词，并检查引文确实来自原文。
-2. `Generator` 调用只接收这份清洗后的 JSON，不直接接收原始 OCR 文本；它根据 NCLEX 类别生成题干、选项、答案、解释和证据。
+1. 已有 `structuredSections` 的模块直接保留 section ID、页码、标题、段落、项目符号、术语和证据；纯文本模块由 `Extractor` 输出相同结构的 `chunks` JSON。原始文本不足以覆盖结构化结果时，会额外保留有界的原文块。
+2. 后端按内容权重建立 coverage plan，限制单个章节最多约占 45%，再把题目分成每批约 10 题的请求。每批只接收自己负责的 chunks，不重复发送整份讲义。
+3. Generator 批次在受控并行度（默认 4）下调用 Hikari。每批必须返回准确数量；Pydantic/schema、证据、选项、重复概念和引用校验失败时只重试该批。
+4. 所有批次完成后进行全局近似去重；缺口只生成 replacement batches。响应中的 `generation` 字段包含批次数、并发度、章节 coverage 和警告。
 
-如果 Extractor 的结构化输出、来源 ID、原文引用或 Generator 的题目校验失败，整个请求会被拒绝，不会回退到通用模板题。这样可以减少上下文污染和无依据的术语，但 AI 结果仍需由专业人员对照权威教材复核。
+系统支持 25、50 和 100 题，后端硬上限为 100。若材料没有足够的独立、可引用信息，系统会返回已通过检查的题目并明确说明缺口，不会为了凑数编造医学事实。AI 结果仍需由专业人员对照权威护理教材复核。
 
 Extractor 的 Pydantic schema 校验失败时会自动重试 2 次；三次都失败才返回错误，不会把不合规 JSON 传给 Generator。视觉文档解析默认设有限额：每次最多 20 页、每页最多 8 MB 的图像载荷。可按需通过环境变量调整，但更高限制会增加 token 消耗：
 

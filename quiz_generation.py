@@ -1,11 +1,14 @@
-"""Hikari-backed NCLEX question generation with strict local validation."""
+"""Hikari-backed, section-aware NCLEX question generation."""
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -18,22 +21,33 @@ CATEGORIES = {
 }
 
 
-class CleanSource(BaseModel):
+class LectureChunk(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    sectionId: str = Field(min_length=1)
+    sourceId: str = Field(min_length=1)
+    sourceName: str = Field(min_length=1)
+    pageNumber: int | None = None
+    heading: str = Field(min_length=1)
+    paragraphs: list[str] = Field(default_factory=list, max_length=80)
+    bulletPoints: list[str] = Field(default_factory=list, max_length=80)
+    keyTerms: list[str] = Field(default_factory=list, max_length=80)
+    evidence: list[str] = Field(min_length=1, max_length=100)
+
+
+class ChunkedSource(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
 
     sourceId: str = Field(min_length=1)
     sourceName: str = Field(min_length=1)
     title: str = Field(min_length=1)
-    coreConcepts: list[str] = Field(min_length=1, max_length=20)
-    keyTerms: list[str] = Field(min_length=1, max_length=30)
-    clinicalFacts: list[str] = Field(min_length=1, max_length=30)
-    sourceQuotes: list[str] = Field(min_length=1, max_length=40)
+    chunks: list[LectureChunk] = Field(min_length=1, max_length=200)
 
 
-class ExtractionResponse(BaseModel):
+class ChunkedExtractionResponse(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
 
-    sources: list[CleanSource] = Field(min_length=1)
+    sources: list[ChunkedSource] = Field(min_length=1)
 
 
 class Evidence(BaseModel):
@@ -62,7 +76,9 @@ class Question(BaseModel):
     concept: str = Field(min_length=2)
     correctRationale: str = Field(min_length=20)
     stemEvidence: list[Evidence] = Field(min_length=1)
-    optionRationales: list[OptionRationale]
+    optionRationales: list[OptionRationale] = Field(min_length=4, max_length=8)
+    primarySectionId: str = Field(min_length=1)
+    sectionIds: list[str] = Field(default_factory=list, max_length=20)
 
     @field_validator('category')
     @classmethod
@@ -94,111 +110,363 @@ class QuizResponse(BaseModel):
 
 
 SYSTEM_PROMPT = """You are an expert NCLEX-RN item writer and clinical fact checker.
-Generate only defensible questions grounded in the supplied study materials. Do not use
-outside facts unless the source explicitly supports them. Create a balanced mix of these
-three single-best-answer categories: PRIORITY ASSESSMENT, PATIENT EDUCATION & SAFETY, and
-PHYSICAL ASSESSMENT & CUE MAPPING.
-For each question provide 4 distinct options, one best answer, a clinically specific
-rationale, and exact source quotations with sourceId. Do not generate SATA questions. Do not
-mention that you are an AI. Return only
-the JSON schema requested by the caller."""
+Write only defensible questions grounded in the supplied lecture chunks. Never use outside
+medical facts, even if generally true. Use a balanced mix of PRIORITY ASSESSMENT, PATIENT
+EDUCATION & SAFETY, and PHYSICAL ASSESSMENT & CUE MAPPING. Do not write SATA questions.
+Each question must have four distinct options, one best answer, a specific rationale, exact
+evidence quotes copied from the supplied chunks, and the sectionId(s) used. Use different
+concepts and question angles within a batch. Return only the requested JSON."""
 
-EXTRACTOR_PROMPT = """You are a medical-document extraction editor. Clean the supplied OCR or
-study text before any question writing happens. Return only structured JSON. Keep only
-high-value, source-grounded nursing content: a concise title, core concepts, compound
-medical key terms, concise clinical facts, and exact sourceQuotes copied character-for-
-character from the supplied text. Do not add terms that are absent from the text. Prefer
-Fluid Volume Deficit over isolated words such as deficit or volume. Merge obvious
-singular/plural variants, remove OCR noise, generic words, and duplicate facts. Do not
-diagnose or supplement missing facts. Every sourceQuote must be a verbatim substring of
-its source."""
+
+EXTRACTOR_PROMPT = """You are a medical-document extraction editor. Convert the supplied source
+into faithful, ordered lecture chunks. Preserve useful paragraphs, bullet points, key terms,
+headings, page numbers, and exact evidence spans. Keep labels such as Meaning, Definition,
+Causes, and Assessment nested under their nearest parent topic when the layout shows that
+relationship. Do not summarize away material, correct facts, diagnose, or add anything absent
+from the source. Every evidence value must be a verbatim substring of its matching raw source.
+Return only schema JSON."""
+
+
+@dataclass
+class BatchPlan:
+    index: int
+    count: int
+    chunks: list[dict[str, Any]]
+    section_quotas: dict[str, int]
 
 
 class HikariQuizGenerator:
-    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 120):
+    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 180):
         self.api_key = api_key
         self.base_url = base_url.rstrip('/')
         self.model = model
         self.timeout = timeout
+        self.max_count = max(1, min(int(os.environ.get('QUIZ_MAX_COUNT', '100')), 100))
+        self.batch_size = max(5, min(int(os.environ.get('QUIZ_BATCH_SIZE', '10')), 20))
+        self.max_workers = max(1, min(int(os.environ.get('QUIZ_MAX_CONCURRENCY', '4')), 5))
+        self.batch_retries = max(1, min(int(os.environ.get('QUIZ_BATCH_RETRIES', '2')), 4))
 
     def pipeline_info(self) -> dict[str, str]:
         return {
-            'provider': 'Hikari',
-            'base_url': self.base_url,
-            'model': self.model,
-            'extractor': 'medical_extraction',
-            'generator': 'nclex_quiz',
-            'schema_retries': '2',
+            'provider': 'Hikari', 'base_url': self.base_url, 'model': self.model,
+            'extractor': 'medical_extraction_chunks', 'generator': 'nclex_quiz_batched',
+            'schema_retries': '2', 'batch_size': str(self.batch_size),
+            'max_concurrency': str(self.max_workers),
         }
 
-    def generate(self, sources: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
-        clean_sources = self.extract_sources(sources)
-        clean_text = json.dumps({'sources': clean_sources}, ensure_ascii=False, indent=2)
-        user_prompt = (
-            f"Generate exactly {count} questions when the material supports them. "
-            "You are receiving CLEAN EXTRACTED MATERIAL, not raw OCR. Do not use any fact, term, or assumption outside it. Every evidence quote must be copied verbatim from sourceQuotes in the clean material. "
-            "Use only the three allowed single-best-answer categories and never generate SATA questions.\n\n"
-            + clean_text
-        )
-        last_error: ValueError | None = None
-        for attempt in range(3):
-            retry_note = '' if attempt == 0 else (
-                f'\n\nSEMANTIC VALIDATION FAILED: {last_error}. Return the complete JSON again. '
-                'Correct the issue before responding. Use only the three allowed '
-                'single-best-answer categories, never SATA, and ensure every evidence quote '
-                'is copied from the supplied clean sourceQuotes.'
-            )
-            result = self._call_structured('nclex_quiz', SYSTEM_PROMPT, user_prompt + retry_note, QuizResponse, max(2500, count * 1100))
-            try:
-                self._validate_evidence(result, clean_sources)
-                return [item.model_dump(mode='json') for item in result.items[:count]]
-            except ValueError as exc:
-                last_error = exc
-        raise last_error or ValueError('Generated questions failed semantic validation.')
+    def generate(self, sources: list[dict[str, Any]], count: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        requested = max(1, min(int(count or 1), self.max_count))
+        chunks = self.prepare_chunks(sources)
+        plans = self.build_coverage_plan(chunks, requested)
+        if not plans:
+            raise ValueError('The selected material does not contain enough readable content for question generation.')
+        questions: list[Question] = []
+        failures: list[str] = []
+        questions.extend(self._run_plans(plans, existing=[], failures=failures))
+        questions = self._deduplicate(questions)
+        replacement_round = 0
+        while len(questions) < requested and replacement_round < 3:
+            missing = requested - len(questions)
+            replacement_plans = self.build_coverage_plan(chunks, missing, offset=replacement_round + len(plans))
+            if not replacement_plans:
+                break
+            questions.extend(self._run_plans(replacement_plans, existing=questions, failures=failures))
+            questions = self._deduplicate(questions)
+            replacement_round += 1
+        questions = questions[:requested]
+        coverage = self._coverage(questions, chunks)
+        warnings: list[str] = []
+        if len(questions) < requested:
+            warnings.append(f'Only {len(questions)} of {requested} questions passed source, schema, and duplicate checks. The material did not support more distinct defensible questions without inventing facts.')
+        if failures:
+            warnings.append(f'{len(failures)} batch attempt(s) were discarded after validation.')
+        metadata = {
+            'requested_count': requested, 'generated_count': len(questions),
+            'initial_batches': len(plans), 'replacement_rounds': replacement_round,
+            'batch_size': self.batch_size, 'concurrency': min(self.max_workers, len(plans)),
+            'coverage': coverage, 'warnings': warnings, 'chunk_count': len(chunks),
+        }
+        return [item.model_dump(mode='json') for item in questions], metadata
 
-    def extract_sources(self, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def prepare_chunks(self, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
         raw_sources = [
-            {'sourceId': str(source.get('id') or 'source'), 'sourceName': str(source.get('name') or 'Study material'), 'rawText': str(source.get('text') or '').strip()}
+            {'sourceId': str(source.get('id') or 'source'), 'sourceName': str(source.get('name') or 'Study material'),
+             'rawText': str(source.get('text') or '').strip(),
+             'structuredSections': source.get('structuredSections') or source.get('structured_sections') or []}
             for source in sources if str(source.get('text') or '').strip()
         ]
         if not raw_sources:
             raise ValueError('Add detailed study material before generating a quiz.')
-        prompt = 'Extract and clean these sources. Preserve sourceId and sourceName exactly. Do not merge separate sources.\n\n' + json.dumps({'sources': raw_sources}, ensure_ascii=False)
-        raw_by_id = {item['sourceId']: item['rawText'] for item in raw_sources}
+        chunks: list[dict[str, Any]] = []
+        needs_extraction: list[dict[str, Any]] = []
+        for source in raw_sources:
+            made = self._chunks_from_structured(source)
+            if made:
+                chunks.extend(made)
+            else:
+                needs_extraction.append(source)
+        if needs_extraction:
+            chunks.extend(self.extract_chunks(needs_extraction))
+        raw_by_id = {source['sourceId']: source['rawText'] for source in raw_sources}
+        for chunk in chunks:
+            chunk['_rawText'] = raw_by_id.get(chunk['sourceId'], '')
+        return [chunk for chunk in chunks if self._chunk_text(chunk).strip()]
+
+    def extract_chunks(self, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        prompt_sources = [{'sourceId': item['sourceId'], 'sourceName': item['sourceName'], 'rawText': item['rawText']} for item in sources]
+        raw_by_id = {item['sourceId']: item['rawText'] for item in sources}
+        prompt = 'Extract these sources into ordered chunks. Preserve source IDs exactly.\n\n' + json.dumps({'sources': prompt_sources}, ensure_ascii=False)
         last_error: ValueError | None = None
         for attempt in range(3):
-            retry_note = '' if attempt == 0 else (
-                '\n\nQUOTE VALIDATION FAILED. Retry the extraction and copy every sourceQuotes '
-                'value character-for-character from the matching rawText. You may only change '
-                'whitespace by selecting a different exact span; never paraphrase, summarize, '
-                'correct, or invent a quote.'
-            )
-            result = self._call_structured('medical_extraction', EXTRACTOR_PROMPT, prompt + retry_note, ExtractionResponse, 7000)
+            retry_note = '' if attempt == 0 else '\n\nQUOTE VALIDATION FAILED. Retry the complete JSON. Every evidence string must be copied character-for-character from its matching rawText.'
+            result = self._call_structured('medical_extraction_chunks', EXTRACTOR_PROMPT, prompt + retry_note, ChunkedExtractionResponse, 14000)
             try:
-                seen: set[str] = set()
-                cleaned_sources: list[dict[str, Any]] = []
+                seen: set[str] = set(); chunks: list[dict[str, Any]] = []
                 for source in result.sources:
                     if source.sourceId not in raw_by_id or source.sourceId in seen:
                         raise ValueError('Extractor returned an invalid or duplicate sourceId.')
                     seen.add(source.sourceId)
                     raw_text = raw_by_id[source.sourceId]
-                    canonical_quotes: list[str] = []
-                    for quote in source.sourceQuotes:
-                        canonical = self._canonical_quote(raw_text, quote)
-                        if canonical is None:
-                            raise ValueError(f"Extractor produced a quote not found in source '{source.sourceId}'.")
-                        canonical_quotes.append(canonical)
-                    cleaned_sources.append(source.model_copy(update={'sourceQuotes': canonical_quotes}).model_dump(mode='json'))
+                    for number, chunk in enumerate(source.chunks, 1):
+                        if chunk.sourceId != source.sourceId:
+                            raise ValueError('Extractor returned a chunk with the wrong sourceId.')
+                        evidence = []
+                        for quote in chunk.evidence:
+                            canonical = self._canonical_quote(raw_text, quote)
+                            if canonical is None:
+                                raise ValueError(f"Extractor evidence was not found in source '{source.sourceId}'.")
+                            evidence.append(canonical)
+                        chunks.append(chunk.model_copy(update={'sectionId': chunk.sectionId or f'{source.sourceId}-section-{number}', 'evidence': evidence}).model_dump(mode='json'))
                 if seen != set(raw_by_id):
                     raise ValueError('Extractor did not return every selected source.')
-                return cleaned_sources
+                return chunks
             except ValueError as exc:
                 last_error = exc
         raise last_error or ValueError('Extractor output failed source validation.')
 
+    def extract_sources(self, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Compatibility alias for the former extraction helper."""
+        return self.extract_chunks(sources)
+
+    @staticmethod
+    def _chunks_from_structured(source: dict[str, Any]) -> list[dict[str, Any]]:
+        sections = source.get('structuredSections') or []
+        if not isinstance(sections, list):
+            return []
+        result: list[dict[str, Any]] = []
+        source_id, source_name = source['sourceId'], source['sourceName']
+
+        def visit(section: dict[str, Any], parent_id: str, index: int) -> None:
+            if not isinstance(section, dict):
+                return
+            heading = str(section.get('header') or section.get('heading') or '').strip()
+            paragraphs = section.get('paragraphs') if isinstance(section.get('paragraphs'), list) else []
+            bullets = section.get('bullet_points') if isinstance(section.get('bullet_points'), list) else section.get('bulletPoints') if isinstance(section.get('bulletPoints'), list) else []
+            terms = section.get('key_terms') if isinstance(section.get('key_terms'), list) else section.get('keyTerms') if isinstance(section.get('keyTerms'), list) else []
+            summary = str(section.get('summary_notes') or section.get('summaryNotes') or '').strip()
+            candidates = [str(item).strip() for item in [*paragraphs, *bullets, summary] if str(item).strip()]
+            evidence = []
+            for candidate in candidates:
+                canonical = HikariQuizGenerator._canonical_quote(source.get('rawText', ''), candidate)
+                if canonical is not None and canonical not in evidence:
+                    evidence.append(canonical)
+            if not evidence and heading:
+                canonical = HikariQuizGenerator._canonical_quote(source.get('rawText', ''), heading)
+                evidence = [canonical] if canonical is not None else []
+            section_id = str(section.get('sectionId') or f'{source_id}-{parent_id}-{index}')
+            chunk = {'sectionId': section_id, 'sourceId': source_id, 'sourceName': source_name,
+                     'pageNumber': section.get('page_number', section.get('pageNumber')), 'heading': heading or 'Study material',
+                     'paragraphs': [str(item).strip() for item in paragraphs if str(item).strip()],
+                     'bulletPoints': [str(item).strip() for item in bullets if str(item).strip()],
+                     'keyTerms': [str(item).strip() for item in terms if str(item).strip()], 'evidence': evidence}
+            if chunk['evidence']:
+                result.append(chunk)
+            for child_index, child in enumerate(section.get('subsections') or [], 1):
+                visit(child, section_id, child_index)
+
+        for index, section in enumerate(sections, 1):
+            visit(section, 'section', index)
+        # Structured extraction is useful for hierarchy, but the original source is
+        # the safest evidence. Add bounded raw-text chunks when the structured view
+        # does not appear to contain most of the lecture.
+        raw_text = source.get('rawText', '')
+        structured_length = sum(len('\n'.join(dict.fromkeys(str(item) for item in [*(chunk.get('paragraphs') or []), *(chunk.get('bulletPoints') or []), *(chunk.get('evidence') or [])]))) for chunk in result)
+        if raw_text and structured_length < len(raw_text) * 0.75:
+            paragraphs = [part.strip() for part in re.split(r'\n\s*\n|\n', raw_text) if part.strip()]
+            current: list[str] = []; current_length = 0; raw_index = 1
+            for paragraph in paragraphs:
+                if current and current_length + len(paragraph) > 1800:
+                    text = '\n'.join(current)
+                    result.append({'sectionId': f'{source_id}-raw-{raw_index}', 'sourceId': source_id,
+                                   'sourceName': source_name, 'pageNumber': None,
+                                   'heading': f'Original lecture text · part {raw_index}',
+                                   'paragraphs': current, 'bulletPoints': [], 'keyTerms': [], 'evidence': current[:]})
+                    raw_index += 1; current = []; current_length = 0
+                current.append(paragraph); current_length += len(paragraph)
+            if current:
+                result.append({'sectionId': f'{source_id}-raw-{raw_index}', 'sourceId': source_id,
+                               'sourceName': source_name, 'pageNumber': None,
+                               'heading': f'Original lecture text · part {raw_index}',
+                               'paragraphs': current, 'bulletPoints': [], 'keyTerms': [], 'evidence': current[:]})
+        return result
+
+    @staticmethod
+    def _chunk_text(chunk: dict[str, Any]) -> str:
+        parts = [chunk.get('heading') or '', *(chunk.get('paragraphs') or []), *(chunk.get('bulletPoints') or []), *(chunk.get('keyTerms') or []), *(chunk.get('evidence') or [])]
+        return '\n'.join(str(part) for part in parts if str(part).strip())
+
+    def build_coverage_plan(self, chunks: list[dict[str, Any]], count: int, offset: int = 0) -> list[BatchPlan]:
+        usable = [chunk for chunk in chunks if len(self._chunk_text(chunk)) >= 45]
+        if not usable:
+            return []
+        total_weight = sum(max(1, len(self._chunk_text(chunk))) for chunk in usable)
+        batch_count = max(1, (count + self.batch_size - 1) // self.batch_size)
+        batch_sizes = [count // batch_count + (1 if i < count % batch_count else 0) for i in range(batch_count)]
+        allocations: list[int] = []; assigned = 0
+        for index, chunk in enumerate(usable):
+            remaining = len(usable) - index - 1
+            allocation = round(count * max(1, len(self._chunk_text(chunk))) / total_weight)
+            allocation = max(0 if count < len(usable) else 1, allocation)
+            allocation = min(allocation, count - assigned - remaining if count - assigned > remaining else count - assigned)
+            allocations.append(max(0, allocation)); assigned += allocations[-1]
+        while assigned < count:
+            index = max(range(len(usable)), key=lambda i: len(self._chunk_text(usable[i])))
+            allocations[index] += 1; assigned += 1
+        while assigned > count:
+            index = max((i for i, value in enumerate(allocations) if value > 0), key=lambda i: allocations[i])
+            allocations[index] -= 1; assigned -= 1
+        # A long opening section must not consume the whole quiz. Redistribute its
+        # excess when other usable sections are available.
+        if len(usable) > 1:
+            cap = max(1, (count * 45 + 99) // 100)
+            for index, value in enumerate(list(allocations)):
+                while allocations[index] > cap:
+                    receiver = min((i for i in range(len(usable)) if i != index), key=lambda i: allocations[i])
+                    allocations[index] -= 1; allocations[receiver] += 1
+        remaining = allocations[:]; cursor = 0; plans: list[BatchPlan] = []
+        for index, batch_size in enumerate(batch_sizes):
+            needed = batch_size; selected: list[dict[str, Any]] = []; quotas: dict[str, int] = {}
+            while needed > 0 and any(remaining):
+                while remaining[cursor] == 0:
+                    cursor = (cursor + 1) % len(usable)
+                take = min(remaining[cursor], needed)
+                chunk = usable[cursor]
+                if chunk['sectionId'] not in quotas:
+                    selected.append(chunk)
+                quotas[chunk['sectionId']] = quotas.get(chunk['sectionId'], 0) + take
+                remaining[cursor] -= take; needed -= take
+                cursor = (cursor + 1) % len(usable)
+            if selected:
+                plans.append(BatchPlan(offset + index, batch_size, selected, quotas))
+        return plans
+
+    def _run_plans(self, plans: list[BatchPlan], existing: list[Question], failures: list[str]) -> list[Question]:
+        accepted: list[Question] = []
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(plans)), thread_name_prefix='hikari-quiz') as executor:
+            futures = {executor.submit(self._generate_batch, plan, existing): plan for plan in plans}
+            for future in as_completed(futures):
+                plan = futures[future]
+                try:
+                    accepted.extend(future.result())
+                except Exception as exc:
+                    failures.append(f'batch {plan.index + 1}: {exc}')
+        return accepted
+
+    def _generate_batch(self, plan: BatchPlan, existing: list[Question]) -> list[Question]:
+        chunk_payload = [self._compact_chunk(chunk) for chunk in plan.chunks]
+        existing_hint = '' if not existing else '\nDo not repeat these existing stems or concepts:\n' + json.dumps([{'stem': item.stem, 'concept': item.concept} for item in existing[-80:]], ensure_ascii=False)
+        user_prompt = f'Generate exactly {plan.count} distinct questions for batch {plan.index + 1}. Follow sectionQuotas exactly using primarySectionId. Keep evidence quotes verbatim and include all sectionId(s) used. Never fill gaps with outside knowledge.\n\n' + json.dumps({'sectionQuotas': plan.section_quotas, 'chunks': chunk_payload}, ensure_ascii=False) + existing_hint
+        last_error: Exception | None = None
+        for attempt in range(self.batch_retries + 1):
+            retry_note = '' if attempt == 0 else f'\n\nBATCH VALIDATION FAILED: {last_error}. Return exactly {plan.count} new questions, fix every issue, and do not repeat a prior stem or concept.'
+            result = self._call_structured('nclex_quiz_batch', SYSTEM_PROMPT, user_prompt + retry_note, QuizResponse, max(6000, plan.count * 900))
+            try:
+                if len(result.items) != plan.count:
+                    raise ValueError(f'Expected exactly {plan.count} questions, received {len(result.items)}.')
+                self._validate_batch(result.items, plan, existing)
+                return result.items
+            except (ValueError, ValidationError) as exc:
+                last_error = exc
+        raise ValueError(f'Batch {plan.index + 1} failed after {self.batch_retries + 1} attempts: {last_error}')
+
+    @staticmethod
+    def _compact_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
+        return {'sectionId': chunk['sectionId'], 'sourceId': chunk['sourceId'], 'pageNumber': chunk.get('pageNumber'), 'heading': chunk.get('heading'), 'paragraphs': chunk.get('paragraphs') or [], 'bulletPoints': chunk.get('bulletPoints') or [], 'keyTerms': chunk.get('keyTerms') or [], 'evidence': chunk.get('evidence') or []}
+
+    def _validate_batch(self, items: list[Question], plan: BatchPlan, existing: list[Question]) -> None:
+        chunks = plan.chunks
+        section_ids = {chunk['sectionId'] for chunk in chunks}
+        source_map: dict[str, str] = {}
+        for chunk in chunks:
+            source_map[chunk['sourceId']] = chunk.get('_rawText') or source_map.get(chunk['sourceId'], '') or self._chunk_text(chunk)
+        stems: set[str] = set(); concepts: set[str] = set(); existing_stems = {self._normalise(item.stem) for item in existing}
+        for item in items:
+            stem_key, concept_key = self._normalise(item.stem), self._normalise(item.concept)
+            if stem_key in stems or stem_key in existing_stems:
+                raise ValueError('Duplicate question stem detected.')
+            if concept_key in concepts:
+                raise ValueError('Duplicate concept detected within batch.')
+            for prior in existing:
+                if concept_key == self._normalise(prior.concept) and difflib.SequenceMatcher(None, stem_key, self._normalise(prior.stem)).ratio() >= 0.58:
+                    raise ValueError('Duplicate concept detected against an earlier batch.')
+            stems.add(stem_key); concepts.add(concept_key)
+            rationale_indexes = sorted(rationale.optionIndex for rationale in item.optionRationales)
+            if rationale_indexes != list(range(len(item.options))):
+                raise ValueError('Every answer option must have exactly one rationale.')
+            evidence = item.stemEvidence + [entry for rationale in item.optionRationales for entry in rationale.evidence]
+            if not evidence:
+                raise ValueError('Every question needs source evidence.')
+            inferred: set[str] = set()
+            for quote in evidence:
+                if quote.sourceId not in source_map:
+                    raise ValueError(f"Question evidence was not assigned to source '{quote.sourceId}'.")
+                canonical = self._canonical_quote(source_map[quote.sourceId], quote.quote)
+                if canonical is None:
+                    raise ValueError(f"Question evidence was not found in source '{quote.sourceId}'.")
+                quote.quote = canonical
+                inferred.update(
+                    chunk['sectionId'] for chunk in chunks
+                    if chunk['sourceId'] == quote.sourceId
+                    and self._canonical_quote(self._chunk_text(chunk), quote.quote) is not None
+                )
+            if item.sectionIds and not set(item.sectionIds).issubset(section_ids):
+                raise ValueError('Question contains an unknown sectionId.')
+            if not item.sectionIds:
+                item.sectionIds = list(inferred)[:5]
+            if item.primarySectionId not in section_ids or item.primarySectionId not in item.sectionIds:
+                raise ValueError('Question primarySectionId must be one of its assigned sectionIds.')
+        actual_quotas = {section_id: 0 for section_id in plan.section_quotas}
+        for item in items:
+            actual_quotas[item.primarySectionId] = actual_quotas.get(item.primarySectionId, 0) + 1
+        if actual_quotas != plan.section_quotas:
+            raise ValueError(f'Section quota mismatch: expected {plan.section_quotas}, received {actual_quotas}.')
+
+    @staticmethod
+    def _normalise(value: str) -> str:
+        return re.sub(r'[^a-z0-9]+', ' ', value.casefold()).strip()
+
+    def _deduplicate(self, items: list[Question]) -> list[Question]:
+        kept: list[Question] = []
+        for item in items:
+            current = self._normalise(item.stem); duplicate = False
+            for prior in kept:
+                previous = self._normalise(prior.stem)
+                if difflib.SequenceMatcher(None, current, previous).ratio() >= 0.94 or (self._normalise(item.concept) == self._normalise(prior.concept) and difflib.SequenceMatcher(None, current, previous).ratio() >= 0.75):
+                    duplicate = True; break
+            if not duplicate:
+                kept.append(item)
+        return kept
+
+    @staticmethod
+    def _coverage(items: list[Question], chunks: list[dict[str, Any]]) -> dict[str, int]:
+        counts = {chunk['sectionId']: 0 for chunk in chunks}
+        for item in items:
+            if item.primarySectionId in counts:
+                counts[item.primarySectionId] += 1
+        return counts
+
     @staticmethod
     def _canonical_quote(source_text: str, quote: str) -> str | None:
-        """Return the exact source span when the model only changed whitespace."""
         if quote in source_text:
             return quote
         compact_quote = ' '.join(quote.split())
@@ -209,8 +477,7 @@ class HikariQuizGenerator:
         return source_text[match.start():match.end()] if match else None
 
     def _call_structured(self, name: str, system_prompt: str, user_prompt: str, model_type: type[BaseModel], max_output_tokens: int) -> BaseModel:
-        schema = model_type.model_json_schema()
-        self._make_schema_strict(schema)
+        schema = model_type.model_json_schema(); self._make_schema_strict(schema)
         last_error: Exception | None = None
         for attempt in range(3):
             retry_note = '' if attempt == 0 else '\n\nPrevious output failed local schema validation. Correct the JSON and return the complete schema, with no prose.'
@@ -219,8 +486,7 @@ class HikariQuizGenerator:
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     response_data = json.loads(response.read())
-                raw = self._response_text(response_data)
-                return model_type.model_validate(json.loads(raw))
+                return model_type.model_validate(json.loads(self._response_text(response_data)))
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode(errors='replace')[:800]
                 raise ValueError(f'Hikari {name} request failed ({exc.code}): {detail}') from exc
@@ -246,54 +512,22 @@ class HikariQuizGenerator:
     def _make_schema_strict(cls, schema: dict[str, Any]) -> None:
         if isinstance(schema.get('$defs'), dict):
             for definition in schema['$defs'].values():
-                if isinstance(definition, dict):
-                    cls._make_schema_strict(definition)
+                if isinstance(definition, dict): cls._make_schema_strict(definition)
         properties = schema.get('properties')
         if isinstance(properties, dict):
             schema['required'] = list(properties)
             for value in properties.values():
-                if isinstance(value, dict):
-                    cls._make_schema_strict(value)
+                if isinstance(value, dict): cls._make_schema_strict(value)
         for key in ('items', 'anyOf', 'oneOf', 'allOf'):
             value = schema.get(key)
-            if isinstance(value, dict):
-                cls._make_schema_strict(value)
+            if isinstance(value, dict): cls._make_schema_strict(value)
             elif isinstance(value, list):
                 for item in value:
-                    if isinstance(item, dict):
-                        cls._make_schema_strict(item)
-
-    @staticmethod
-    def _validate_evidence(result: QuizResponse, sources: list[dict[str, Any]]) -> None:
-        source_map = {
-            str(source.get('sourceId')): '\n'.join([
-                str(source.get('title') or ''),
-                *source.get('coreConcepts', []),
-                *source.get('keyTerms', []),
-                *source.get('clinicalFacts', []),
-                *source.get('sourceQuotes', []),
-            ])
-            for source in sources
-        }
-        for item in result.items:
-            if item.correctIndex >= len(item.options):
-                raise ValueError('Hikari returned an answer index outside the options.')
-            evidence = item.stemEvidence + [entry for rationale in item.optionRationales for entry in rationale.evidence]
-            for quote in evidence:
-                if quote.sourceId not in source_map:
-                    raise ValueError(f"Question evidence was not found in source '{quote.sourceId}'.")
-                canonical = HikariQuizGenerator._canonical_quote(source_map[quote.sourceId], quote.quote)
-                if canonical is None:
-                    raise ValueError(f"Question evidence was not found in source '{quote.sourceId}'.")
-                quote.quote = canonical
+                    if isinstance(item, dict): cls._make_schema_strict(item)
 
 
 def configured_quiz_generator() -> HikariQuizGenerator | None:
     api_key = os.environ.get('STUDYWELL_API_KEY') or os.environ.get('OPENAI_API_KEY')
     if not api_key:
         return None
-    return HikariQuizGenerator(
-        api_key=api_key,
-        base_url=os.environ.get('STUDYWELL_API_BASE_URL', 'https://hikariapi.xyz/v1'),
-        model=os.environ.get('STUDYWELL_MODEL', 'gpt-5.6-sol'),
-    )
+    return HikariQuizGenerator(api_key=api_key, base_url=os.environ.get('STUDYWELL_API_BASE_URL', 'https://hikariapi.xyz/v1'), model=os.environ.get('STUDYWELL_MODEL', 'gpt-5.6-sol'))

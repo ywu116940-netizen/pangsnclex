@@ -246,14 +246,14 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if self.path == '/api/quiz/generate':
             sources = body.get('sources') or []
-            count = max(1, min(int(body.get('count') or 1), 20))
+            count = max(1, min(int(body.get('count') or 1), 100))
             generator = configured_quiz_generator()
             if generator is None:
                 self._json({'error': 'AI question generation is not configured. Set STUDYWELL_API_KEY and restart the server.'}, 503)
                 return
             try:
-                items = generator.generate(sources, count)
-                self._json({'status': 'ready', 'items': items, 'generation_mode': 'hikari', 'pipeline': generator.pipeline_info()})
+                items, generation = generator.generate(sources, count)
+                self._json({'status': 'ready', 'items': items, 'generation_mode': 'hikari', 'pipeline': generator.pipeline_info(), 'generation': generation})
             except Exception as exc:
                 self._json({'error': str(exc), 'validation': {'passed': False}}, 422)
             return
