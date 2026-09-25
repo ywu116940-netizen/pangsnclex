@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -153,19 +154,49 @@ class HikariQuizGenerator:
         if not raw_sources:
             raise ValueError('Add detailed study material before generating a quiz.')
         prompt = 'Extract and clean these sources. Preserve sourceId and sourceName exactly. Do not merge separate sources.\n\n' + json.dumps({'sources': raw_sources}, ensure_ascii=False)
-        result = self._call_structured('medical_extraction', EXTRACTOR_PROMPT, prompt, ExtractionResponse, 7000)
         raw_by_id = {item['sourceId']: item['rawText'] for item in raw_sources}
-        seen: set[str] = set()
-        for source in result.sources:
-            if source.sourceId not in raw_by_id or source.sourceId in seen:
-                raise ValueError('Extractor returned an invalid or duplicate sourceId.')
-            seen.add(source.sourceId)
-            raw_text = raw_by_id[source.sourceId]
-            if not all(quote in raw_text for quote in source.sourceQuotes):
-                raise ValueError(f"Extractor produced a quote not found in source '{source.sourceId}'.")
-        if seen != set(raw_by_id):
-            raise ValueError('Extractor did not return every selected source.')
-        return [source.model_dump(mode='json') for source in result.sources]
+        last_error: ValueError | None = None
+        for attempt in range(3):
+            retry_note = '' if attempt == 0 else (
+                '\n\nQUOTE VALIDATION FAILED. Retry the extraction and copy every sourceQuotes '
+                'value character-for-character from the matching rawText. You may only change '
+                'whitespace by selecting a different exact span; never paraphrase, summarize, '
+                'correct, or invent a quote.'
+            )
+            result = self._call_structured('medical_extraction', EXTRACTOR_PROMPT, prompt + retry_note, ExtractionResponse, 7000)
+            try:
+                seen: set[str] = set()
+                cleaned_sources: list[dict[str, Any]] = []
+                for source in result.sources:
+                    if source.sourceId not in raw_by_id or source.sourceId in seen:
+                        raise ValueError('Extractor returned an invalid or duplicate sourceId.')
+                    seen.add(source.sourceId)
+                    raw_text = raw_by_id[source.sourceId]
+                    canonical_quotes: list[str] = []
+                    for quote in source.sourceQuotes:
+                        canonical = self._canonical_quote(raw_text, quote)
+                        if canonical is None:
+                            raise ValueError(f"Extractor produced a quote not found in source '{source.sourceId}'.")
+                        canonical_quotes.append(canonical)
+                    cleaned_sources.append(source.model_copy(update={'sourceQuotes': canonical_quotes}).model_dump(mode='json'))
+                if seen != set(raw_by_id):
+                    raise ValueError('Extractor did not return every selected source.')
+                return cleaned_sources
+            except ValueError as exc:
+                last_error = exc
+        raise last_error or ValueError('Extractor output failed source validation.')
+
+    @staticmethod
+    def _canonical_quote(source_text: str, quote: str) -> str | None:
+        """Return the exact source span when the model only changed whitespace."""
+        if quote in source_text:
+            return quote
+        compact_quote = ' '.join(quote.split())
+        if not compact_quote:
+            return None
+        pattern = r'\s+'.join(re.escape(part) for part in compact_quote.split())
+        match = re.search(pattern, source_text, flags=re.UNICODE)
+        return source_text[match.start():match.end()] if match else None
 
     def _call_structured(self, name: str, system_prompt: str, user_prompt: str, model_type: type[BaseModel], max_output_tokens: int) -> BaseModel:
         schema = model_type.model_json_schema()
@@ -239,8 +270,12 @@ class HikariQuizGenerator:
                 raise ValueError('Hikari returned an answer index outside the options.')
             evidence = item.stemEvidence + [entry for rationale in item.optionRationales for entry in rationale.evidence]
             for quote in evidence:
-                if quote.sourceId not in source_map or quote.quote not in source_map[quote.sourceId]:
+                if quote.sourceId not in source_map:
                     raise ValueError(f"Question evidence was not found in source '{quote.sourceId}'.")
+                canonical = HikariQuizGenerator._canonical_quote(source_map[quote.sourceId], quote.quote)
+                if canonical is None:
+                    raise ValueError(f"Question evidence was not found in source '{quote.sourceId}'.")
+                quote.quote = canonical
             if item.category in {'NURSING PROCEDURE & TECHNIQUE', 'AGE-RELATED NORMAL VARIATIONS'} and 'select all that apply' not in item.stem.casefold():
                 raise ValueError('SATA categories must use Select all that apply wording.')
 
