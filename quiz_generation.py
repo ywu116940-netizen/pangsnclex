@@ -596,7 +596,9 @@ class HikariQuizGenerator:
                 else:
                     option_texts.append(str(option).strip())
                     option_ids.append(chr(65 + index))
-            correct_index = cls._provider_correct_index(raw.get('correctIndex', raw.get('correctAnswer')), option_ids, option_texts)
+            uses_local_index = 'correctIndex' in raw
+            correct_value = raw.get('correctIndex') if uses_local_index else raw.get('correctAnswer', raw.get('answer'))
+            correct_index = cls._provider_correct_index(correct_value, option_ids, option_texts, raw_options, zero_based=uses_local_index)
             evidence_values = raw.get('evidenceQuotes') or raw.get('evidence') or raw.get('sourceEvidence') or []
             if not isinstance(evidence_values, list):
                 evidence_values = [evidence_values]
@@ -649,16 +651,39 @@ class HikariQuizGenerator:
             })
         return {'items': items}
 
-    @staticmethod
-    def _provider_correct_index(value: Any, option_ids: list[str], option_texts: list[str]) -> int:
+    @classmethod
+    def _provider_correct_index(cls, value: Any, option_ids: list[str], option_texts: list[str], raw_options: list[Any], zero_based: bool = False) -> int:
+        if isinstance(value, dict):
+            for key in ('id', 'optionId', 'option_id', 'letter', 'value', 'text', 'answer'):
+                if key in value:
+                    index = cls._provider_correct_index(value.get(key), option_ids, option_texts, raw_options, zero_based=False)
+                    if index >= 0:
+                        return index
         if isinstance(value, int):
-            return value
+            if zero_based and 0 <= value < len(option_texts):
+                return value
+            if value == 0:
+                return 0
+            if 1 <= value <= len(option_texts):
+                return value - 1
+            return -1
         answer = str(value or '').strip().casefold()
+        answer = re.sub(r'^(?:correct\s+)?(?:answer|option|choice)\s*[:#-]?\s*', '', answer)
         for index, option_id in enumerate(option_ids):
-            if answer == option_id.casefold():
+            option_key = option_id.casefold()
+            if answer == option_key or re.match(rf'^{re.escape(option_key)}(?:[.):\s-]|$)', answer):
                 return index
         for index, text in enumerate(option_texts):
             if answer == text.casefold():
+                return index
+        if answer.isdigit():
+            number = int(answer)
+            if number == 0:
+                return 0
+            if 1 <= number <= len(option_texts):
+                return number - 1
+        for index, option in enumerate(raw_options):
+            if isinstance(option, dict) and any(option.get(key) is True for key in ('correct', 'isCorrect', 'is_correct')):
                 return index
         return -1
 
