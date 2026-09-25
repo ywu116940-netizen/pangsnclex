@@ -537,6 +537,7 @@ class HikariQuizGenerator:
     def _call_structured(self, name: str, system_prompt: str, user_prompt: str, model_type: type[BaseModel], max_output_tokens: int) -> BaseModel:
         schema = model_type.model_json_schema(); self._make_schema_strict(schema)
         last_error: Exception | None = None
+        last_structured: Any = None
         for attempt in range(3):
             retry_note = '' if attempt == 0 else '\n\nPrevious output failed local schema validation. Correct the JSON and return the complete schema, with no prose.'
             payload = {'model': self.model, 'input': [{'role': 'system', 'content': [{'type': 'input_text', 'text': system_prompt}]}, {'role': 'user', 'content': [{'type': 'input_text', 'text': user_prompt + retry_note}]}], 'temperature': 0.1, 'max_output_tokens': max_output_tokens, 'text': {'format': {'type': 'json_schema', 'name': name, 'strict': True, 'schema': schema}}}
@@ -545,6 +546,7 @@ class HikariQuizGenerator:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     response_data = json.loads(response.read())
                 structured = json.loads(self._response_text(response_data))
+                last_structured = structured
                 # Hikari currently returns the quiz array under `questions` even
                 # when the supplied strict schema names the field `items`.
                 # Normalise only this known top-level provider alias, then keep
@@ -562,6 +564,8 @@ class HikariQuizGenerator:
             except (json.JSONDecodeError, ValidationError) as exc:
                 last_error = exc
         detail = str(last_error).replace('\n', ' ')[:500] if last_error else 'unknown schema error'
+        if model_type is QuizResponse and last_structured is not None:
+            detail += ' Provider payload: ' + json.dumps(last_structured, ensure_ascii=False)[:6000]
         raise ValueError(f'Hikari {name} failed schema validation after 3 attempts: {detail}') from last_error
 
     @staticmethod
