@@ -142,9 +142,21 @@ class HikariQuizGenerator:
             "For SATA questions, set category to NURSING PROCEDURE & TECHNIQUE or AGE-RELATED NORMAL VARIATIONS and make the stem explicitly say Select all that apply.\n\n"
             + clean_text
         )
-        result = self._call_structured('nclex_quiz', SYSTEM_PROMPT, user_prompt, QuizResponse, max(2500, count * 1100))
-        self._validate_evidence(result, clean_sources)
-        return [item.model_dump(mode='json') for item in result.items[:count]]
+        last_error: ValueError | None = None
+        for attempt in range(3):
+            retry_note = '' if attempt == 0 else (
+                f'\n\nSEMANTIC VALIDATION FAILED: {last_error}. Return the complete JSON again. '
+                'Correct the issue before responding. SATA categories must include the exact '
+                'phrase "Select all that apply" in the stem, and every evidence quote must '
+                'be copied from the supplied clean sourceQuotes.'
+            )
+            result = self._call_structured('nclex_quiz', SYSTEM_PROMPT, user_prompt + retry_note, QuizResponse, max(2500, count * 1100))
+            try:
+                self._validate_evidence(result, clean_sources)
+                return [item.model_dump(mode='json') for item in result.items[:count]]
+            except ValueError as exc:
+                last_error = exc
+        raise last_error or ValueError('Generated questions failed semantic validation.')
 
     def extract_sources(self, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
         raw_sources = [
