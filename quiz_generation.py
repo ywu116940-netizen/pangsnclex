@@ -166,6 +166,7 @@ class HikariQuizGenerator:
         questions = self._deduplicate(questions)
         replacement_round = 0
         while len(questions) < requested and replacement_round < 3:
+            before_replacement = len(questions)
             missing = requested - len(questions)
             replacement_plans = self.build_coverage_plan(chunks, missing, offset=replacement_round + len(plans))
             if not replacement_plans:
@@ -173,18 +174,27 @@ class HikariQuizGenerator:
             questions.extend(self._run_plans(replacement_plans, existing=questions, failures=failures))
             questions = self._deduplicate(questions)
             replacement_round += 1
+            # Do not make the user wait through two more identical replacement
+            # rounds when the provider could not produce any additional valid
+            # questions from the selected material.
+            if len(questions) == before_replacement:
+                break
         questions = questions[:requested]
         coverage = self._coverage(questions, chunks)
         warnings: list[str] = []
         if len(questions) < requested:
-            warnings.append(f'Only {len(questions)} of {requested} questions passed source, schema, and duplicate checks. The material did not support more distinct defensible questions without inventing facts.')
+            warnings.append(f'Only {len(questions)} of {requested} questions passed source, schema, and duplicate checks.')
         if failures:
-            warnings.append(f'{len(failures)} batch attempt(s) were discarded after validation.')
+            warnings.append(f'{len(failures)} batch validation issue(s) were recorded; valid questions from those batches were kept.')
+        if not questions:
+            detail = failures[0] if failures else 'No questions passed source validation.'
+            raise ValueError(f'Question generation returned no valid questions. {detail}')
         metadata = {
             'requested_count': requested, 'generated_count': len(questions),
             'initial_batches': len(plans), 'replacement_rounds': replacement_round,
             'batch_size': self.batch_size, 'concurrency': min(self.max_workers, len(plans)),
             'coverage': coverage, 'warnings': warnings, 'chunk_count': len(chunks),
+            'failure_details': failures[:12],
         }
         return [item.model_dump(mode='json') for item in questions], metadata
 
@@ -375,19 +385,67 @@ class HikariQuizGenerator:
     def _generate_batch(self, plan: BatchPlan, existing: list[Question]) -> list[Question]:
         chunk_payload = [self._compact_chunk(chunk) for chunk in plan.chunks]
         existing_hint = '' if not existing else '\nDo not repeat these existing stems or concepts:\n' + json.dumps([{'stem': item.stem, 'concept': item.concept} for item in existing[-80:]], ensure_ascii=False)
-        user_prompt = f'Generate exactly {plan.count} distinct questions for batch {plan.index + 1}. Follow sectionQuotas exactly using primarySectionId. Keep evidence quotes verbatim and include all sectionId(s) used. Never fill gaps with outside knowledge.\n\n' + json.dumps({'sectionQuotas': plan.section_quotas, 'chunks': chunk_payload}, ensure_ascii=False) + existing_hint
+        base_prompt = f'Generate distinct questions for batch {plan.index + 1}. Follow sectionQuotas exactly using primarySectionId. Keep evidence quotes verbatim and include all sectionId(s) used. Never fill gaps with outside knowledge.\n\n'
         last_error: Exception | None = None
+        accepted: list[Question] = []
         for attempt in range(self.batch_retries + 1):
-            retry_note = '' if attempt == 0 else f'\n\nBATCH VALIDATION FAILED: {last_error}. Return exactly {plan.count} new questions, fix every issue, and do not repeat a prior stem or concept.'
-            result = self._call_structured('nclex_quiz_batch', SYSTEM_PROMPT, user_prompt + retry_note, QuizResponse, max(6000, plan.count * 900))
+            remaining_quotas = self._remaining_quotas(plan.section_quotas, accepted)
+            remaining_count = sum(remaining_quotas.values())
+            if remaining_count <= 0:
+                return accepted
+            retry_note = '' if attempt == 0 else f'\n\nSome earlier questions failed validation: {last_error}. Return only the {remaining_count} missing replacement questions. Do not repeat accepted or prior questions.'
+            accepted_hint = '' if not accepted else '\nDo not repeat these questions already accepted from this batch:\n' + json.dumps(
+                [{'stem': item.stem, 'concept': item.concept} for item in accepted], ensure_ascii=False
+            )
+            user_prompt = (
+                base_prompt
+                + f'Return exactly {remaining_count} questions.\n\n'
+                + json.dumps({'sectionQuotas': remaining_quotas, 'chunks': chunk_payload}, ensure_ascii=False)
+                + existing_hint + accepted_hint + retry_note
+            )
+            result = self._call_structured(
+                'nclex_quiz_batch', SYSTEM_PROMPT, user_prompt, QuizResponse,
+                max(4000, remaining_count * 900),
+            )
+            attempt_plan = BatchPlan(plan.index, remaining_count, plan.chunks, remaining_quotas)
+            valid, errors = self._validate_items(result.items, attempt_plan, [*existing, *accepted])
+            accepted.extend(valid)
+            accepted = self._deduplicate(accepted)
+            if not errors and len(result.items) != remaining_count:
+                errors.append(f'Expected {remaining_count} questions, received {len(result.items)}.')
+            last_error = ValueError('; '.join(errors[:4]) or f'{remaining_count - len(valid)} question(s) were missing.')
+        if accepted:
+            return accepted
+        raise ValueError(f'Batch {plan.index + 1} produced no valid questions after {self.batch_retries + 1} attempts: {last_error}')
+
+    @staticmethod
+    def _remaining_quotas(target: dict[str, int], accepted: list[Question]) -> dict[str, int]:
+        used: dict[str, int] = {}
+        for item in accepted:
+            used[item.primarySectionId] = used.get(item.primarySectionId, 0) + 1
+        return {
+            section_id: max(0, count - used.get(section_id, 0))
+            for section_id, count in target.items()
+            if count - used.get(section_id, 0) > 0
+        }
+
+    def _validate_items(self, items: list[Question], plan: BatchPlan, existing: list[Question]) -> tuple[list[Question], list[str]]:
+        """Keep valid questions even when another item in the same provider response fails."""
+        accepted: list[Question] = []
+        errors: list[str] = []
+        remaining = self._remaining_quotas(plan.section_quotas, [])
+        for index, item in enumerate(items, 1):
+            if item.primarySectionId not in remaining or remaining[item.primarySectionId] <= 0:
+                errors.append(f'Question {index}: section quota exceeded or unknown primarySectionId.')
+                continue
+            item_plan = BatchPlan(plan.index, 1, plan.chunks, {item.primarySectionId: 1})
             try:
-                if len(result.items) != plan.count:
-                    raise ValueError(f'Expected exactly {plan.count} questions, received {len(result.items)}.')
-                self._validate_batch(result.items, plan, existing)
-                return result.items
+                self._validate_batch([item], item_plan, [*existing, *accepted])
+                accepted.append(item)
+                remaining[item.primarySectionId] -= 1
             except (ValueError, ValidationError) as exc:
-                last_error = exc
-        raise ValueError(f'Batch {plan.index + 1} failed after {self.batch_retries + 1} attempts: {last_error}')
+                errors.append(f'Question {index}: {exc}')
+        return accepted, errors
 
     @staticmethod
     def _compact_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
