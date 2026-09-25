@@ -92,7 +92,7 @@ export STUDYWELL_MODEL="gpt-5.6-sol"
 .python312/bin/python3 server.py --port 4173
 ```
 
-如果 Hikari API key 已设置在 `OPENAI_API_KEY`，服务也会读取该变量。题目要求 JSON Schema 输出，校验选项、题型、SATA 措辞及逐字原文证据；任何引用与所选材料不匹配的结果都会被拒绝。所选学习材料会发送给 Hikari 生成题目。AI 题目仍应对照可靠护理教材复核，不替代权威 NCLEX 备考资料。
+如果 Hikari API key 已设置在 `OPENAI_API_KEY`，服务也会读取该变量。题目要求 JSON Schema 输出，校验选项、单选题类别及逐字原文证据；任何引用与所选材料不匹配的结果都会被拒绝。所选学习材料会发送给 Hikari 生成题目。AI 题目仍应对照可靠护理教材复核，不替代权威 NCLEX 备考资料。
 
 题目生成采用两阶段链式 workflow：
 

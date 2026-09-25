@@ -15,8 +15,6 @@ CATEGORIES = {
     'PRIORITY ASSESSMENT',
     'PATIENT EDUCATION & SAFETY',
     'PHYSICAL ASSESSMENT & CUE MAPPING',
-    'NURSING PROCEDURE & TECHNIQUE',
-    'AGE-RELATED NORMAL VARIATIONS',
 }
 
 
@@ -98,11 +96,11 @@ class QuizResponse(BaseModel):
 SYSTEM_PROMPT = """You are an expert NCLEX-RN item writer and clinical fact checker.
 Generate only defensible questions grounded in the supplied study materials. Do not use
 outside facts unless the source explicitly supports them. Create a balanced mix of these
-five categories: PRIORITY ASSESSMENT, PATIENT EDUCATION & SAFETY, PHYSICAL ASSESSMENT &
-CUE MAPPING, NURSING PROCEDURE & TECHNIQUE, and AGE-RELATED NORMAL VARIATIONS.
+three single-best-answer categories: PRIORITY ASSESSMENT, PATIENT EDUCATION & SAFETY, and
+PHYSICAL ASSESSMENT & CUE MAPPING.
 For each question provide 4 distinct options, one best answer, a clinically specific
-rationale, and exact source quotations with sourceId. Use SATA wording and multiple correct
-options only for the two SATA categories. Do not mention that you are an AI. Return only
+rationale, and exact source quotations with sourceId. Do not generate SATA questions. Do not
+mention that you are an AI. Return only
 the JSON schema requested by the caller."""
 
 EXTRACTOR_PROMPT = """You are a medical-document extraction editor. Clean the supplied OCR or
@@ -139,16 +137,16 @@ class HikariQuizGenerator:
         user_prompt = (
             f"Generate exactly {count} questions when the material supports them. "
             "You are receiving CLEAN EXTRACTED MATERIAL, not raw OCR. Do not use any fact, term, or assumption outside it. Every evidence quote must be copied verbatim from sourceQuotes in the clean material. "
-            "For SATA questions, set category to NURSING PROCEDURE & TECHNIQUE or AGE-RELATED NORMAL VARIATIONS and make the stem explicitly say Select all that apply.\n\n"
+            "Use only the three allowed single-best-answer categories and never generate SATA questions.\n\n"
             + clean_text
         )
         last_error: ValueError | None = None
         for attempt in range(3):
             retry_note = '' if attempt == 0 else (
                 f'\n\nSEMANTIC VALIDATION FAILED: {last_error}. Return the complete JSON again. '
-                'Correct the issue before responding. SATA categories must include the exact '
-                'phrase "Select all that apply" in the stem, and every evidence quote must '
-                'be copied from the supplied clean sourceQuotes.'
+                'Correct the issue before responding. Use only the three allowed '
+                'single-best-answer categories, never SATA, and ensure every evidence quote '
+                'is copied from the supplied clean sourceQuotes.'
             )
             result = self._call_structured('nclex_quiz', SYSTEM_PROMPT, user_prompt + retry_note, QuizResponse, max(2500, count * 1100))
             try:
@@ -288,8 +286,6 @@ class HikariQuizGenerator:
                 if canonical is None:
                     raise ValueError(f"Question evidence was not found in source '{quote.sourceId}'.")
                 quote.quote = canonical
-            if item.category in {'NURSING PROCEDURE & TECHNIQUE', 'AGE-RELATED NORMAL VARIATIONS'} and 'select all that apply' not in item.stem.casefold():
-                raise ValueError('SATA categories must use Select all that apply wording.')
 
 
 def configured_quiz_generator() -> HikariQuizGenerator | None:
