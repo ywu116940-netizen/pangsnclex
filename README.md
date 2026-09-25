@@ -94,6 +94,20 @@ export STUDYWELL_MODEL="gpt-5.6-sol"
 
 如果 Hikari API key 已设置在 `OPENAI_API_KEY`，服务也会读取该变量。题目要求 JSON Schema 输出，校验选项、单选题类别及逐字原文证据；任何引用与所选材料不匹配的结果都会被拒绝。所选学习材料会发送给 Hikari 生成题目。AI 题目仍应对照可靠护理教材复核，不替代权威 NCLEX 备考资料。
 
+## Supabase shared modules
+
+The shared workspace uses these server-only Render environment variables:
+
+```text
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-server-secret-key
+SUPABASE_STORAGE_BUCKET=study-materials
+```
+
+The browser never receives the service-role key. The Python backend stores module metadata in the Supabase `public.modules` table and uploads original documents to the configured private Storage bucket. Browser `localStorage` is only a temporary migration fallback when the shared API is unavailable; Supabase is the primary source of truth once the shared API loads successfully.
+
+Because automatic table exposure was disabled during project setup, manually expose `public.modules` in Supabase under `Project Settings -> Data API -> Exposed schemas and tables` (or the equivalent `Data API` table exposure screen). Keep the Storage bucket private.
+
 题目生成采用两阶段链式 workflow：
 
 1. `Extractor` 调用先处理原始学习材料，输出严格 JSON，包括 `coreConcepts`、`keyTerms`、`clinicalFacts` 和原文 `sourceQuotes`。它会清理 OCR 噪声、重复词和泛化词，并检查引文确实来自原文。

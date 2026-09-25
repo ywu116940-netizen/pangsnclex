@@ -11,10 +11,12 @@ function cleanModuleMarkers(module){
  if(Array.isArray(module.structuredSections))for(const section of module.structuredSections)for(const key of ['bullet_points','key_terms'])if(Array.isArray(section[key]))section[key]=section[key].map(value=>{const clean=cleanTableMarker(value);if(clean!==value)migratedTableMarkers=true;return clean});
  return module;
 }
-let custom=Array.isArray(stored?.modules)?stored.modules.map(cleanModuleMarkers):[],attempts=Array.isArray(stored?.attempts)?stored.attempts:[],hiddenDemo=stored?.hiddenDemo===true;
+const legacyModules=Array.isArray(stored?.modules)?stored.modules.map(cleanModuleMarkers):[];
+let custom=[...legacyModules],attempts=Array.isArray(stored?.attempts)?stored.attempts:[],hiddenDemo=stored?.hiddenDemo===true;
+let modulesFromServer=false,modulesSyncError='';
 if(migratedTableMarkers)try{localStorage.setItem('studywell-v1',JSON.stringify({modules:custom,attempts,hiddenDemo}))}catch{}
 const formatStates=new Map();let activeSourceId=null,viewOriginal=false;
-let draftSource='',draftFormatted='',draftStructuredSections=[],draftRequestId=0,draftTimer=null,draftBusy=false,draftError='';
+let draftSource='',draftFormatted='',draftStructuredSections=[],draftOriginalFilename='',draftStoragePath='',draftRequestId=0,draftTimer=null,draftBusy=false,draftError='';
 async function requestDocumentStructure(source){
  const bytes=new TextEncoder().encode(source);let binary='';
  for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));
@@ -63,12 +65,41 @@ async function formatModule(id){
  try{
   const result=await requestDocumentStructure(source),formatted=sectionsAsText(result.sections);
   const latest=custom.find(x=>x.id===id);if(latest?.source!==source||formatStates.get(id)!==state)return;
-  latest.formattedSource=formatted;latest.structuredSections=result.sections;save();formatStates.set(id,{});
+  latest.formattedSource=formatted;latest.structuredSections=result.sections;
+  if(modulesFromServer)Object.assign(latest,applyServerModule(await persistModule(latest,true)));
+  save();formatStates.set(id,{});
  }catch(error){if(formatStates.get(id)===state)formatStates.set(id,{error:error.message||'Formatting is unavailable. The original material is saved.'});}
  if(activeSourceId===id)showSource();
 }
-let page='dashboard',filter='all',quiz=null;let generationBusy=false;let practiceError='';let generationPipeline=null;let selectedModuleIds=new Set(custom.length?[custom[0].id]:hiddenDemo?[]:['skin']);let questionCount=6;let editingModuleId=null,deletingModuleId=null;let statusRequestId=0;let generationStatus={enabled:null,message:'Checking clinical generation availability…'};const allModules=()=>[...(!hiddenDemo?samples:[]),...custom];const demoOnly=()=>selectedModuleIds.size===1&&selectedModuleIds.has('skin')&&allModules().some(m=>m.id==='skin'&&m.demo);
-function save(){try{localStorage.setItem('studywell-v1',JSON.stringify({modules:custom,attempts,hiddenDemo}))}catch{toast('Storage is full. This session’s changes could not be saved.')}}
+let page='dashboard',filter='all',quiz=null;let generationBusy=false;let practiceError='';let generationPipeline=null;let selectedModuleIds=new Set(custom.length?[custom[0].id]:hiddenDemo?[]:['skin']);let questionCount=6;let editingModuleId=null,deletingModuleId=null;let statusRequestId=0;let generationStatus={enabled:null,message:'Checking clinical generation availability…'};const allModules=()=>custom.length?custom:(hiddenDemo?[]:samples);const demoOnly=()=>selectedModuleIds.size===1&&selectedModuleIds.has('skin')&&allModules().some(m=>m.id==='skin'&&m.demo);
+function save(){try{localStorage.setItem('studywell-v1',JSON.stringify({modules:modulesFromServer?[]:custom,attempts,hiddenDemo}))}catch{toast('Storage is full. This session’s changes could not be saved.')}}
+async function moduleRequest(path,options={}){
+ const response=await fetch(path,{headers:{'Content-Type':'application/json',...(options.headers||{})},...options});
+ let data={};try{data=await response.json()}catch{}
+ if(!response.ok)throw Error(data.error||'Shared module service is unavailable.');
+ return data;
+}
+function modulePayload(module){return {id:module.id,name:module.name,original_filename:module.originalFilename||'',storage_path:module.storagePath||'',source_text:module.source||'',formatted_text:module.formattedSource||'',structured_sections:Array.isArray(module.structuredSections)?module.structuredSections:[]}}
+async function persistModule(module,updating=false){
+ const data=await moduleRequest(updating?`/api/modules/${encodeURIComponent(module.id)}`:'/api/modules',{method:updating?'PUT':'POST',body:JSON.stringify(modulePayload(module))});
+ return data.module;
+}
+function applyServerModule(module){
+ return cleanModuleMarkers({...module,sourceName:module.sourceName||`${module.name} · Study notes`,icon:module.icon||'book',color:module.color||'',demo:false});
+}
+async function loadSharedModules(){
+ try{
+  let data=await moduleRequest('/api/modules',{cache:'no-store'});
+  if(!data.modules?.length&&legacyModules.length){
+   for(const legacy of legacyModules)await persistModule(legacy,false);
+   data=await moduleRequest('/api/modules',{cache:'no-store'});
+  }
+  custom=(data.modules||[]).map(applyServerModule);
+  modulesFromServer=true;hiddenDemo=false;modulesSyncError='';
+  selectedModuleIds=new Set(custom.length?[custom[0].id]:['skin']);
+  save();render();
+ }catch(error){modulesSyncError=error.message||'Shared modules could not be loaded.';render();}
+}
 function toast(t){const el=document.getElementById('toast');el.textContent=t;el.classList.add('show');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>el.classList.remove('show'),3500)}
 function facts(source){const lines=source.split(/\n+/).map(x=>x.replace(/^\s*[-*#]+\s*/,'').trim()).filter(Boolean);const pairs=lines.map(x=>{const n=x.indexOf(':');return n>1&&n<100&&x.slice(n+1).trim().length>15?{term:x.slice(0,n).trim(),definition:x.slice(n+1).trim(),quote:x}:null}).filter(Boolean);if(pairs.length>=4)return {mode:'topic',items:pairs.filter((x,i,a)=>a.findIndex(y=>y.term.toLowerCase()===x.term.toLowerCase()||y.definition.toLowerCase()===x.definition.toLowerCase())===i)};const sentences=source.match(/[^.!?\n]+[.!?]?/g)||[];const stop=new Set('their about which these those where before after between through should would could during patient nursing patients assessment information because describe include record observe'.split(' '));const items=sentences.map(s=>{s=s.trim();const words=s.match(/[a-zA-Z][a-zA-Z-]{4,}/g)||[];const term=words.filter(w=>!stop.has(w.toLowerCase())).sort((a,b)=>b.length-a.length)[0];return term&&s.length>35?{term,definition:s,quote:s}:null}).filter(Boolean).filter((x,i,a)=>a.findIndex(y=>y.term.toLowerCase()===x.term.toLowerCase())===i);return{mode:'cloze',items}}
 function shuffle(a){return [...a].sort(()=>Math.random()-.5)}
@@ -77,13 +108,13 @@ const moduleProgress=id=>{const m=allModules().find(m=>m.id===id);const total=fa
 function go(p){page=p;render();window.scrollTo({top:0,behavior:'instant'})}
 function render(){const titles={dashboard:'Dashboard',modules:'Study modules',practice:'Practice quiz',progress:'My progress',materials:'My materials'};document.getElementById('app').innerHTML=`<aside class="sidebar"><div class="brand"><span class="mascot-mark"><img src="mascot.png" alt="Studywell cat mascot" width="40" height="40"></span><div>studywell<small>NCLEX-RN PRACTICE</small></div></div><div class="nav-caption">YOUR STUDY SPACE</div><nav>${[['dashboard','grid','Dashboard'],['modules','book','Study modules'],['practice','quiz','Practice quiz'],['progress','chart','My progress'],['materials','folder','My materials']].map(([p,i,t])=>`<button class="nav-button ${page===p?'active':''}" data-page="${p}" ${page===p?'aria-current="page"':''}>${icon(i)}<span>${t}</span></button>`).join('')}</nav><div class="sidebar-bottom"><div class="source-promise">${icon('shield')}<strong>Grounded in your materials.</strong>Every question starts with your notes. Every answer leads back to the source.</div><div class="profile"><div class="avatar">S</div><div>Your study space<small>Future RN, one step at a time</small></div></div></div></aside><main class="main"><header class="topbar"><div class="breadcrumb">Your workspace <span style="padding:0 12px;color:#c7d1dc">/</span> <strong>${titles[page]}</strong></div><div class="brand mobile-brand"><span class="mascot-mark"><img src="mascot.png" alt="Studywell cat mascot" width="40" height="40"></span>studywell</div><div class="topbar-right"><span class="track-pill">NCLEX-RN</span><span class="avatar">S</span></div></header><div class="content">${generationStatus.enabled===false?`<div class="notice" role="status">${icon('shield')} ${esc(generationStatus.message||'Clinical generation is paused pending cost approval.')} You can still upload and read your materials.</div>`:''}${page==='dashboard'?dashboard():page==='modules'?modulesPage():page==='practice'?practice():page==='progress'?progressPage():materialsPage()}<footer class="footer"><span>${icon('shield')} Built around your notes. Designed for your next step.</span><span>Independent study tool · Not affiliated with NCSBN</span></footer></div></main>`;bind()}
 function heading(title,sub,action=true){return `<div class="page-heading"><div><h1>${title}</h1><p>${sub}</p></div>${action?`<button class="button primary" data-new-quiz>${icon('plus')} Create a quiz</button>`:''}</div>`}
-function stats(){return `<div class="stats"><div class="stat"><div class="stat-top">Questions practiced ${icon('quiz')}</div><div class="stat-value">${answers().length}</div><div class="stat-sub">Every question is a step forward</div></div><div class="stat"><div class="stat-top">Overall accuracy ${icon('target')}</div><div class="stat-value">${score()===null?'—':score()+'<span style="font-size:17px">%</span>'}</div><div class="stat-sub">${score()===null?'Your first quiz starts the story':'Across your completed quizzes'}</div></div><div class="stat"><div class="stat-top">Study modules ${icon('book')}</div><div class="stat-value">${allModules().length}</div><div class="stat-sub">${custom.length} personal · ${samples.length} demo module${samples.length===1?'':'s'}</div></div></div>`}
+function stats(){return `<div class="stats"><div class="stat"><div class="stat-top">Questions practiced ${icon('quiz')}</div><div class="stat-value">${answers().length}</div><div class="stat-sub">Every question is a step forward</div></div><div class="stat"><div class="stat-top">Overall accuracy ${icon('target')}</div><div class="stat-value">${score()===null?'—':score()+'<span style="font-size:17px">%</span>'}</div><div class="stat-sub">${score()===null?'Your first quiz starts the story':'Across your completed quizzes'}</div></div><div class="stat"><div class="stat-top">Study modules ${icon('book')}</div><div class="stat-value">${allModules().length}</div><div class="stat-sub">${custom.length} shared · ${custom.length?'Synced to Supabase':'Demo fallback'}</div></div></div>`}
 function cards(ms){return `<div class="modules-grid">${ms.map(m=>`<article class="module"><div class="module-top"><div class="module-icon ${m.color||''}">${icon(m.icon||'book')}</div><span class="badge">${m.demo?'Demo module':'Your material'}</span></div><h3>${esc(m.name)}</h3><p>${m.source.split(/\s+/).length} words <span style="padding:0 5px">·</span> 1 source</p><div class="module-progress"><div class="progress-label"><span>${attemptsForModule(m.id).length?'Practice sessions':'Ready when you are'}</span><span>${attemptsForModule(m.id).length} completed</span></div></div><div class="module-footer"><button class="text-button source-btn" data-source="${esc(m.id)}">View source</button><button class="button primary module-practice" data-start="${esc(m.id)}">Practice ${icon('arrow')}</button></div><div class="module-manage"><button class="text-button" data-edit="${esc(m.id)}">Edit module</button><button class="text-button delete-link" data-delete="${esc(m.id)}">Delete</button></div></article>`).join('')}</div>`}
 function weekly(){const weekAgo=Date.now()-7*86400000;return attempts.filter(a=>a.date>weekAgo).reduce((n,a)=>n+a.answers.length,0)}
 function weekPanel(){const n=weekly();return `<section class="panel"><div class="panel-title"><h2>Your weekly goal</h2>${icon('target')}</div><div class="ring" style="--angle:${Math.min(n/30,1)*360}deg"><div class="ring-center"><strong>${n}<span style="display:inline;font-size:17px;font-weight:500;color:#a3b2c2"> / 30</span></strong><span>questions practiced</span></div></div><p class="goal-desc">${n>=30?'You reached your goal. Nice work.':n?'A little practice adds up.':'Small steps. Steady progress.'}<br><strong>${n>=30?'Keep building your confidence.':`${30-n} questions to your weekly goal`}</strong></p><div class="weekdays">${Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);const did=attempts.some(a=>new Date(a.date).toDateString()===d.toDateString());return`<div class="day ${did?'done':''}"><b>${did?'✓':'·'}</b>${d.toLocaleDateString('en',{weekday:'narrow'})}</div>`}).join('')}</div></section>`}
 function activities(limit=3){return attempts.length?[...attempts].reverse().slice(0,limit).map(a=>`<div class="activity-row"><div>${esc(a.name)}<br><small>${new Date(a.date).toLocaleDateString('en',{month:'short',day:'numeric'})} · ${a.answers.length} questions</small></div><span class="activity-score">${Math.round(a.answers.filter(x=>x.correct).length/a.answers.length*100)}%</span></div>`).join(''):`<div class="empty-activity">${icon('clock')}<span>Your completed quizzes will appear here.<br>Try a demo module or bring your own notes.</span></div>`}
 function dashboard(){return `${heading('A little practice. A lot of possibility.','Make space for progress, one question at a time.')}<div class="dashboard-grid"><div><section class="welcome"><div><span class="eyebrow">YOUR NEXT CHAPTER STARTS HERE</span><h2>Your notes.<br>Your path to confident care.</h2><p>Turn what you’re learning into focused practice, with explanations you can trace back to the source.</p><button class="button primary" ${allModules().length?`data-start="${esc(custom[0]?.id||allModules()[0].id)}"`:'data-create'}>${allModules().length?(attempts.length?'Keep practicing':'Try a practice quiz'):'Add study material'} ${icon('arrow')}</button></div><figure class="mascot-welcome"><div class="mascot-portrait"><img src="mascot.png" alt="Your tabby cat, Studywell’s study buddy" width="180" height="180"></div><figcaption>Your study buddy.<br><strong>Here for every small win.</strong></figcaption></figure></section>${stats()}<section><div class="section-title"><h2>Your study modules</h2><button class="text-button" data-page="modules">View all modules ${icon('arrow')}</button></div>${cards(allModules().slice(0,4))}</section><section class="activity"><div class="section-title"><h2>Recent practice</h2><button class="text-button" data-page="progress">View progress</button></div>${activities()}</section></div><aside class="right-panel">${weekPanel()}<section class="tip">${icon('bulb')}<h3>Understand the “why.”</h3>After each question, take a moment to read the rationale—even when you get it right. Connect the answer back to your notes.</section><section class="panel"><div class="panel-title"><h2>Make it yours</h2>${icon('file')}</div><p class="small-copy">Your lectures. Your study guides. Your own words.<br>Add your material to build a module around what you’re learning.</p><button class="text-button" data-create style="margin-top:17px">Add study material ${icon('plus')}</button></section></aside></div>`}
-function modulesPage(){const ms=allModules().filter(m=>filter==='all'||(filter==='mine'?!m.demo:m.demo));return`${heading('Your study modules','A focused place for everything you’re learning.')}<div class="toolbar"><select id="moduleFilter" aria-label="Filter modules"><option value="all" ${filter==='all'?'selected':''}>All modules (${allModules().length})</option><option value="mine" ${filter==='mine'?'selected':''}>My modules (${custom.length})</option><option value="demo" ${filter==='demo'?'selected':''}>Demo modules (${hiddenDemo?0:samples.length})</option></select></div>${hiddenDemo?`<button class="text-button restore-demo" id="restoreDemo">Restore built-in example</button>`:''}${ms.length?cards(ms):`<section class="panel result"><h2>A fresh page for your notes.</h2><p>Add your material to create your first personal module.</p><button class="button primary" data-create>${icon('plus')} Add study material</button></section>`}`}
+function modulesPage(){const ms=allModules().filter(m=>filter==='all'||(filter==='mine'?!m.demo:m.demo));return`${heading('Your study modules','A focused place for everything you’re learning.')}<div class="toolbar"><select id="moduleFilter" aria-label="Filter modules"><option value="all" ${filter==='all'?'selected':''}>All modules (${allModules().length})</option><option value="mine" ${filter==='mine'?'selected':''}>Shared modules (${custom.length})</option><option value="demo" ${filter==='demo'?'selected':''}>Demo modules (${hiddenDemo?0:samples.length})</option></select></div>${modulesSyncError?`<div class="notice" role="alert">${icon('shield')} ${esc(modulesSyncError)}${custom.length?' Using the saved local copy for now.':''}</div>`:''}${hiddenDemo?`<button class="text-button restore-demo" id="restoreDemo">Restore built-in example</button>`:''}${ms.length?cards(ms):`<section class="panel result"><h2>A fresh page for your notes.</h2><p>Add your material to create your first shared module.</p><button class="button primary" data-create>${icon('plus')} Add study material</button></section>`}`}
 async function start(id,count){
   if(generationBusy)return;
   if(id && allModules().some(m=>m.id===id)){selectedModuleIds=new Set([id]);}
@@ -117,11 +148,12 @@ function rationale(q){
 }
 function progressPage(){const max=Math.max(1,...Array.from({length:7},(_,i)=>dayCount(i)));return`${heading('Your progress, made visible.','Every session is another step toward confidence.',false)}${stats()}<div class="progress-view"><section class="panel"><div class="section-title"><h2>Your last 7 days</h2><span class="badge">Questions practiced</span></div><div class="chart" role="img" aria-label="Questions practiced each day over the last week">${Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-6+i);const n=dayCount(i);return`<div class="chart-col"><small>${n}</small><div class="chart-bar" style="height:${n/max*140}px"></div><span>${d.toLocaleDateString('en',{weekday:'short'})}</span></div>`}).join('')}</div><p class="small-copy">${attempts.length?'Consistency creates room for confidence. Keep going.':'Your chart will grow as you complete practice sessions.'}</p></section>${weekPanel()}<section class="panel"><h2>Sessions by module</h2>${allModules().map(m=>`<div class="module-report"><div class="progress-label"><span>${esc(m.name)}</span><span>${attemptsForModule(m.id).length} completed</span></div></div>`).join('')}<p class="small-copy">Completed sessions track practice, not a prediction of NCLEX readiness.</p></section><section class="panel"><h2>Practice history</h2><div style="margin-top:17px">${activities(20)}</div></section></div>`}
 function dayCount(i){const d=new Date();d.setDate(d.getDate()-6+i);return attempts.filter(a=>new Date(a.date).toDateString()===d.toDateString()).reduce((n,a)=>n+a.answers.length,0)}
-function materialsPage(){return`${heading('Your material is the starting point.','Keep the source close. Make your practice personal.')}<div class="notice">${icon('lock')} Materials and progress are saved in this browser. Files are read on your device; text is sent to OpenAI when you save a module to organize its reading view. Quiz generation sends only selected modules.</div><div class="source-list">${allModules().map(m=>`<article class="source-item"><div style="display:flex;gap:15px;align-items:center"><div class="module-icon ${m.color||''}">${icon('file')}</div><div><h3>${esc(m.sourceName)}</h3><p>${esc(m.name)} · ${m.demo?'Built-in example':'Personal material'} · ${m.source.split(/\s+/).length} words</p></div></div><div class="source-actions"><button class="button secondary" data-source="${esc(m.id)}">Read source</button><button class="text-button" data-edit="${esc(m.id)}">Edit</button><button class="text-button delete-link" data-delete="${esc(m.id)}">Delete</button></div></article>`).join('')}</div>`}
+function materialsPage(){return`${heading('Your material is the starting point.','Keep the source close. Make your practice personal.')}<div class="notice">${icon('lock')} Shared modules and their extracted text are saved in Supabase. Uploaded files are stored securely in the shared document bucket. Quiz generation sends only selected modules.</div><div class="source-list">${allModules().map(m=>`<article class="source-item"><div style="display:flex;gap:15px;align-items:center"><div class="module-icon ${m.color||''}">${icon('file')}</div><div><h3>${esc(m.sourceName)}</h3><p>${esc(m.name)} · ${m.demo?'Built-in example':'Shared material'} · ${m.source.split(/\s+/).length} words</p></div></div><div class="source-actions"><button class="button secondary" data-source="${esc(m.id)}">Read source</button><button class="text-button" data-edit="${esc(m.id)}">Edit</button><button class="text-button delete-link" data-delete="${esc(m.id)}">Delete</button></div></article>`).join('')}</div>`}
 function bind(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>go(b.dataset.page));document.querySelectorAll('[data-create]').forEach(b=>b.onclick=openCreate);document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>openEdit(b.dataset.edit));document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>openDelete(b.dataset.delete));const restore=document.getElementById('restoreDemo');if(restore)restore.onclick=()=>{hiddenDemo=false;selectedModuleIds.add('skin');save();render()};document.querySelectorAll('[data-start]').forEach(b=>{b.disabled=generationBusy;b.title=generationStatus.enabled===null?'Checking quiz availability…':'';b.onclick=()=>start(b.dataset.start)});document.querySelectorAll('[data-source]').forEach(b=>b.onclick=()=>{const m=allModules().find(m=>m.id===b.dataset.source)||(quiz?.module.id===b.dataset.source?quiz.module:null);if(!m)return;activeSourceId=m.id;viewOriginal=false;document.getElementById('sourceTitle').textContent=m.sourceName;showSource();document.getElementById('sourceDialog').showModal();if(!m.demo&&!m.formattedSource&&!formatStates.has(m.id))void formatModule(m.id)});const mf=document.getElementById('moduleFilter');if(mf)mf.onchange=()=>{filter=mf.value;render()};document.querySelectorAll('[data-new-quiz]').forEach(b=>b.onclick=()=>{quiz=null;practiceError='';go('practice')});document.querySelectorAll('[data-repeat]').forEach(b=>b.onclick=()=>start());document.querySelectorAll('[data-quiz-source]').forEach(b=>b.onchange=()=>{if(b.checked)selectedModuleIds.add(b.dataset.quizSource);else selectedModuleIds.delete(b.dataset.quizSource);render()});const qc=document.getElementById('questionCount');if(qc)qc.onchange=()=>{questionCount=Number(qc.value)};const gs=document.getElementById('generateSelected');if(gs)gs.onclick=()=>start();document.querySelectorAll('input[name=answer]').forEach(el=>el.onchange=()=>{quiz.selected=Number(el.value);document.querySelectorAll('.option').forEach(x=>x.classList.remove('selected'));el.closest('.option').classList.add('selected');quiz.answerError=false;document.querySelector('.answer-hint')?.remove()});const ca=document.getElementById('checkAnswer');if(ca)ca.onclick=()=>{if(quiz.selected===null){quiz.answerError=true;render();return}quiz.checked=true;const q=quiz.questions[quiz.index];quiz.answers.push({term:q.fact.term,correct:quiz.selected===q.correct,selected:quiz.selected});render();document.querySelector('.rationale')?.scrollIntoView({behavior:'smooth',block:'nearest'})};const nq=document.getElementById('nextQuestion');if(nq)nq.onclick=()=>{if(quiz.index===quiz.questions.length-1){quiz.done=true;attempts.push({moduleId:quiz.module.id,moduleIds:quiz.modules.map(m=>m.id),name:quiz.module.name,date:Date.now(),answers:quiz.answers});save()}else{quiz.index++;quiz.selected=null;quiz.checked=false}render();window.scrollTo({top:0,behavior:'instant'})}}
 function openCreate(){
  editingModuleId=null;
  document.getElementById('createForm').reset();
+ draftOriginalFilename='';draftStoragePath='';
  resetDraft();
  document.getElementById('createTitle').textContent='Create a study module';
  document.getElementById('saveModuleButton').innerHTML='Save module <span>↗</span>';
@@ -137,6 +169,7 @@ function openEdit(id){
  document.getElementById('saveModuleButton').innerHTML='Save changes <span>↗</span>';
  document.getElementById('moduleName').value=m.name;
  document.getElementById('sourceText').value=m.source;
+ draftOriginalFilename=m.originalFilename||'';draftStoragePath=m.storagePath||'';
  const sections=m.structuredSections||[];
  resetDraft(m.source,sections.length?m.formattedSource||'':'',sections);
  document.getElementById('formModeNote').textContent=m.demo?'Editing the built-in example saves it as your own module. Future practice with the edited material uses AI generation.':'New quizzes will use your updated material. Completed quiz history stays as it was.';
@@ -151,10 +184,14 @@ function openDelete(id){
  document.getElementById('deleteDescription').textContent=`Delete “${m.name}” and its saved study material from this browser?`;
  document.getElementById('deleteDialog').showModal();
 }
-document.getElementById('confirmDelete').onclick=()=>{
+document.getElementById('confirmDelete').onclick=async()=>{
  const id=deletingModuleId,m=allModules().find(module=>module.id===id);if(!m)return;
- if(m.demo)hiddenDemo=true;
- else custom=custom.filter(module=>module.id!==id);
+  if(!m.demo&&modulesFromServer){
+   try{await moduleRequest(`/api/modules/${encodeURIComponent(id)}`,{method:'DELETE',body:JSON.stringify({storage_path:m.storagePath||''})});}
+   catch(error){toast(error.message||'The shared module could not be deleted.');return;}
+  }
+  if(m.demo)hiddenDemo=true;
+  else custom=custom.filter(module=>module.id!==id);
  selectedModuleIds.delete(id);
  if(!selectedModuleIds.size&&allModules().length)selectedModuleIds.add(allModules()[0].id);
  if(quiz?.modules.some(module=>module.id===id))quiz=null;
@@ -176,6 +213,8 @@ async function importFile(file){
     if(!response.ok)throw new Error(result.error||'Document extraction failed.');
     const structured=sectionsAsText(result.sections);
     document.getElementById('sourceText').value=structured;
+    draftOriginalFilename=result.original_filename||file.name;
+    draftStoragePath=result.storage_path||'';
     draftSource=structured;draftFormatted=structured;draftStructuredSections=result.sections||[];draftError=(result.warnings||[]).join(' ');
     showDraftPreview();
     const mode=result.extraction_mode==='vision'?'Multimodal vision extraction':'Local structural extraction';
@@ -192,7 +231,7 @@ document.getElementById('sourceFormat').onclick=()=>{if(activeSourceId)void form
 document.getElementById('sourceText').oninput=()=>queueDraftFormat();
 document.getElementById('retryDraftFormat').onclick=()=>void formatDraft();
 document.getElementById('fileInput').onchange=e=>importFile(e.target.files[0]);const dz=document.getElementById('dropZone');dz.ondragover=e=>{e.preventDefault();dz.style.background='#eaf3fc'};dz.ondragleave=()=>dz.style.background='';dz.ondrop=e=>{e.preventDefault();dz.style.background='';importFile(e.dataTransfer.files[0])};
-document.getElementById('createForm').onsubmit=e=>{
+document.getElementById('createForm').onsubmit=async e=>{
  e.preventDefault();if(importBusy)return;
  const name=document.getElementById('moduleName').value.trim(),source=document.getElementById('sourceText').value.trim(),err=document.getElementById('formError');
  if(!name){err.textContent='Give your module a name.';return}
@@ -202,10 +241,13 @@ document.getElementById('createForm').onsubmit=e=>{
  if(editingModuleId&&!original){err.textContent='This module is no longer available. Please close and try again.';return}
  let id=original?.id||'module-'+Date.now().toString(36);
  if(original?.demo){hiddenDemo=true;id='module-'+Date.now().toString(36)}
- const m={...original,id,name,source,formattedSource:draftSource===source&&draftFormatted?draftFormatted:original?.source===source?original.formattedSource:null,structuredSections:draftSource===source?draftStructuredSections:original?.structuredSections||[],sourceName:name+' · Study notes',icon:original?.icon||'book',color:original?.color||'',demo:false};
+ const m={...original,id,name,source,formattedSource:draftSource===source&&draftFormatted?draftFormatted:original?.source===source?original.formattedSource:null,structuredSections:draftSource===source?draftStructuredSections:original?.structuredSections||[],sourceName:name+' · Study notes',originalFilename:draftOriginalFilename||original?.originalFilename||'',storagePath:draftStoragePath||original?.storagePath||'',icon:original?.icon||'book',color:original?.color||'',demo:false};
  if(original?.source!==source)formatStates.delete(id);
- if(original&&!original.demo)custom=custom.map(module=>module.id===id?m:module);
- else custom.push(m);
+ try{
+  const saved=modulesFromServer?applyServerModule(await persistModule(m,Boolean(original&&!original.demo))):m;
+  if(original&&!original.demo)custom=custom.map(module=>module.id===id?{...module,...saved}:module);
+  else custom.push(saved);
+ }catch(error){err.textContent=error.message||'The shared module could not be saved.';return;}
  if(original?.demo)selectedModuleIds.delete(original.id);
  selectedModuleIds.add(id);
  if(original&&quiz?.modules.some(module=>module.id===original.id))quiz=null;
@@ -223,3 +265,4 @@ async function refreshGenerationStatus(){
  return generationStatus;
 }
 refreshGenerationStatus();
+loadSharedModules();
