@@ -23,9 +23,9 @@ class SupabaseStore:
     """Small server-side Supabase REST client; credentials never reach the browser."""
 
     def __init__(self):
-        self.url = os.environ.get('SUPABASE_URL', '').rstrip('/')
-        self.key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
-        self.bucket = os.environ.get('SUPABASE_STORAGE_BUCKET', 'study-materials')
+        self.url = os.environ.get('SUPABASE_URL', '').strip().rstrip('/')
+        self.key = ''.join(os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '').split())
+        self.bucket = os.environ.get('SUPABASE_STORAGE_BUCKET', 'study-materials').strip()
         if not self.url or not self.key:
             raise SupabaseStoreError('Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.')
 
