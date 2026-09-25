@@ -111,13 +111,63 @@ class QuizResponse(BaseModel):
     items: list[Question] = Field(min_length=1)
 
 
+class CompactQuestion(BaseModel):
+    """Flat provider schema; the backend expands evidence/rationale objects."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    category: str
+    stem: str = Field(min_length=30)
+    options: list[str] = Field(min_length=4, max_length=4)
+    correctIndex: int = Field(ge=0, le=3)
+    optionRationales: list[str] = Field(min_length=4, max_length=4)
+    evidenceQuotes: list[str] = Field(min_length=1, max_length=12)
+    primarySectionId: str = Field(min_length=1)
+
+    @field_validator('category')
+    @classmethod
+    def valid_category(cls, value: str) -> str:
+        if value not in CATEGORIES:
+            raise ValueError(f'Unsupported NCLEX category: {value}')
+        return value
+
+    @field_validator('options')
+    @classmethod
+    def distinct_options(cls, value: list[str]) -> list[str]:
+        if len({item.strip().casefold() for item in value}) != 4:
+            raise ValueError('Exactly four distinct options are required.')
+        return value
+
+    @field_validator('correctIndex')
+    @classmethod
+    def answer_in_range(cls, value: int, info):
+        options = info.data.get('options', [])
+        if options and value >= len(options):
+            raise ValueError('correctIndex must refer to an option.')
+        return value
+
+    @field_validator('optionRationales')
+    @classmethod
+    def complete_rationales(cls, value: list[str]) -> list[str]:
+        if any(len(item.strip()) < 10 for item in value):
+            raise ValueError('Every option requires a specific rationale.')
+        return value
+
+
+class CompactQuizResponse(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    questions: list[CompactQuestion] = Field(min_length=1)
+
+
 SYSTEM_PROMPT = """You are an expert NCLEX-RN item writer and clinical fact checker.
 Write only defensible questions grounded in the supplied lecture chunks. Never use outside
 medical facts, even if generally true. Use a balanced mix of PRIORITY ASSESSMENT, PATIENT
 EDUCATION & SAFETY, and PHYSICAL ASSESSMENT & CUE MAPPING. Do not write SATA questions.
-Each question must have four distinct options, one best answer, a specific rationale, exact
-evidence quotes copied from the supplied chunks, and the sectionId(s) used. Use different
-concepts and question angles within a batch. Return only the requested JSON."""
+Each question must have four distinct options, one best answer, exactly four option rationales
+in A-D order, exact evidence quotes copied from the supplied chunks, and the primarySectionId
+used. Put evidence quotes only once at question level; the backend attaches them to the validated
+rationale objects and derives the correct rationale and concept. Use different concepts and
+question angles within a batch. Keep wording concise and return one complete JSON object only."""
 
 
 EXTRACTOR_PROMPT = """You are a medical-document extraction editor. Convert the supplied source
@@ -419,18 +469,19 @@ class HikariQuizGenerator:
                 + existing_hint + accepted_hint + retry_note
             )
             result = self._call_structured(
-                'nclex_quiz_batch', SYSTEM_PROMPT, user_prompt, QuizResponse,
+                'nclex_quiz_batch', SYSTEM_PROMPT, user_prompt, CompactQuizResponse,
                 max(4000, remaining_count * 900),
                 batch_index=plan.index + 1,
                 generation_attempt=attempt + 1,
                 requested_questions=remaining_count,
             )
+            generated_items = [self._expand_compact_question(item) for item in result.questions]
             attempt_plan = BatchPlan(plan.index, remaining_count, plan.chunks, remaining_quotas)
-            valid, errors = self._validate_items(result.items, attempt_plan, [*existing, *accepted])
+            valid, errors = self._validate_items(generated_items, attempt_plan, [*existing, *accepted])
             accepted.extend(valid)
             accepted = self._deduplicate(accepted)
-            if not errors and len(result.items) != remaining_count:
-                errors.append(f'Expected {remaining_count} questions, received {len(result.items)}.')
+            if not errors and len(generated_items) != remaining_count:
+                errors.append(f'Expected {remaining_count} questions, received {len(generated_items)}.')
             if errors:
                 self._record_validation_errors(plan.index + 1, attempt + 1, errors)
             last_error = ValueError('; '.join(errors[:4]) or f'{remaining_count - len(valid)} question(s) were missing.')
@@ -469,7 +520,44 @@ class HikariQuizGenerator:
 
     @staticmethod
     def _compact_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
-        return {'sectionId': chunk['sectionId'], 'sourceId': chunk['sourceId'], 'pageNumber': chunk.get('pageNumber'), 'heading': chunk.get('heading'), 'paragraphs': chunk.get('paragraphs') or [], 'bulletPoints': chunk.get('bulletPoints') or [], 'keyTerms': chunk.get('keyTerms') or [], 'evidence': chunk.get('evidence') or []}
+        content = list(dict.fromkeys(
+            str(value).strip()
+            for value in [
+                *(chunk.get('paragraphs') or []),
+                *(chunk.get('bulletPoints') or []),
+                *(chunk.get('evidence') or []),
+            ]
+            if str(value).strip()
+        ))
+        return {
+            'sectionId': chunk['sectionId'],
+            'sourceId': chunk['sourceId'],
+            'pageNumber': chunk.get('pageNumber'),
+            'heading': chunk.get('heading'),
+            'content': content,
+            'keyTerms': list(dict.fromkeys(chunk.get('keyTerms') or [])),
+        }
+
+    @staticmethod
+    def _expand_compact_question(item: CompactQuestion) -> Question:
+        evidence = [Evidence(quote=quote, sourceId='__infer__') for quote in item.evidenceQuotes]
+        concept = HikariQuizGenerator._concept_from_text(item.evidenceQuotes[0])
+        return Question(
+            mode='clinical', category=item.category, stem=item.stem,
+            options=item.options, correctIndex=item.correctIndex,
+            concept=concept, correctRationale=item.optionRationales[item.correctIndex],
+            stemEvidence=[entry.model_copy(deep=True) for entry in evidence],
+            optionRationales=[
+                OptionRationale(
+                    optionIndex=index,
+                    explanation=item.optionRationales[index],
+                    evidence=[entry.model_copy(deep=True) for entry in evidence],
+                )
+                for index in range(4)
+            ],
+            primarySectionId=item.primarySectionId,
+            sectionIds=[item.primarySectionId],
+        )
 
     def _validate_batch(self, items: list[Question], plan: BatchPlan, existing: list[Question]) -> None:
         chunks = plan.chunks
@@ -573,8 +661,9 @@ class HikariQuizGenerator:
     ) -> BaseModel:
         schema = model_type.model_json_schema(); self._make_schema_strict(schema)
         last_error: Exception | None = None
-        for attempt in range(3):
-            retry_note = '' if attempt == 0 else '\n\nPrevious output failed local schema validation. Correct the JSON and return the complete schema, with no prose.'
+        attempt_limit = 2 if model_type is CompactQuizResponse else 3
+        for attempt in range(attempt_limit):
+            retry_note = '' if attempt == 0 else '\n\nThe previous response was incomplete or invalid JSON. Return one complete JSON object matching the schema exactly. Keep every field concise, include the exact requested question count, and do not use markdown.'
             payload = {'model': self.model, 'input': [{'role': 'system', 'content': [{'type': 'input_text', 'text': system_prompt}]}, {'role': 'user', 'content': [{'type': 'input_text', 'text': user_prompt + retry_note}]}], 'temperature': 0.1, 'max_output_tokens': max_output_tokens, 'text': {'format': {'type': 'json_schema', 'name': name, 'strict': True, 'schema': schema}}}
             request = urllib.request.Request(self.base_url + '/responses', data=json.dumps(payload, ensure_ascii=False).encode(), headers={'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json'}, method='POST')
             event = self._start_provider_call(name, batch_index, generation_attempt, attempt + 1, requested_questions)
@@ -584,8 +673,8 @@ class HikariQuizGenerator:
                     response_data = json.loads(response.read())
                 usage = self._usage_from_response(response_data)
                 structured = json.loads(self._response_text(response_data))
-                if model_type is QuizResponse:
-                    structured = self._normalise_quiz_payload(structured)
+                if model_type is CompactQuizResponse:
+                    structured = self._normalise_compact_quiz_payload(structured)
                 result = model_type.model_validate(structured)
                 outcome = 'success'
                 return result
@@ -596,13 +685,16 @@ class HikariQuizGenerator:
             except urllib.error.URLError as exc:
                 outcome = 'connection_error'
                 raise ValueError(f'Hikari {name} request could not connect: {exc.reason}') from exc
-            except (json.JSONDecodeError, ValidationError) as exc:
-                outcome = 'schema_error'
+            except json.JSONDecodeError as exc:
+                outcome = 'incomplete_json'
+                last_error = exc
+            except ValidationError as exc:
+                outcome = 'schema_validation_error'
                 last_error = exc
             finally:
                 self._finish_provider_call(event, outcome, usage)
         detail = str(last_error).replace('\n', ' ')[:500] if last_error else 'unknown schema error'
-        raise ValueError(f'Hikari {name} failed schema validation after 3 attempts: {detail}') from last_error
+        raise ValueError(f'Hikari {name} failed schema validation after {attempt_limit} attempts: {detail}') from last_error
 
     def _reset_telemetry(self) -> None:
         self._generation_started = 0.0
@@ -701,6 +793,8 @@ class HikariQuizGenerator:
             'replacement_batch_count': replacement_batch_count,
             'replacement_questions_requested': replacement_questions_requested,
             'schema_retry_requests': sum(1 for call in calls if (call.get('schema_attempt') or 1) > 1),
+            'incomplete_json_count': sum(1 for call in calls if call.get('status') == 'incomplete_json'),
+            'schema_validation_error_count': sum(1 for call in calls if call.get('status') == 'schema_validation_error'),
             'batch_retry_attempts': len({
                 (call.get('batch_index'), call.get('generation_attempt'))
                 for call in calls if (call.get('generation_attempt') or 1) > 1
@@ -716,21 +810,17 @@ class HikariQuizGenerator:
         }
 
     @classmethod
-    def _normalise_quiz_payload(cls, payload: Any) -> Any:
-        """Translate Hikari's documented quiz shape into the local strict schema."""
+    def _normalise_compact_quiz_payload(cls, payload: Any) -> Any:
+        """Translate known Hikari field aliases into the flat provider schema."""
         if not isinstance(payload, dict):
             return payload
         payload = dict(payload)
-        if 'items' not in payload and isinstance(payload.get('questions'), list):
-            payload['items'] = payload.pop('questions')
-        raw_items = payload.get('items')
+        raw_items = payload.get('questions') if isinstance(payload.get('questions'), list) else payload.get('items')
         if not isinstance(raw_items, list):
             return payload
         items: list[Any] = []
         for raw in raw_items:
             if not isinstance(raw, dict):
-                items.append(raw); continue
-            if {'stem', 'correctIndex', 'correctRationale', 'stemEvidence', 'optionRationales'}.issubset(raw):
                 items.append(raw); continue
             raw_options = raw.get('options') if isinstance(raw.get('options'), list) else []
             option_texts: list[str] = []
@@ -745,57 +835,46 @@ class HikariQuizGenerator:
             uses_local_index = 'correctIndex' in raw
             correct_value = raw.get('correctIndex') if uses_local_index else raw.get('correctAnswer', raw.get('answer'))
             correct_index = cls._provider_correct_index(correct_value, option_ids, option_texts, raw_options, zero_based=uses_local_index)
-            evidence_values = raw.get('evidenceQuotes') or raw.get('evidence') or raw.get('sourceEvidence') or []
+            evidence_values = raw.get('evidenceQuotes') or raw.get('stemEvidence') or raw.get('evidence') or raw.get('sourceEvidence') or []
             if not isinstance(evidence_values, list):
                 evidence_values = [evidence_values]
-            evidence: list[dict[str, str]] = []
+            evidence: list[str] = []
             for entry in evidence_values:
                 if isinstance(entry, dict):
                     quote = str(entry.get('quote') or entry.get('text') or '').strip()
-                    source_id = str(entry.get('sourceId') or entry.get('source_id') or '__infer__').strip()
                 else:
-                    quote = str(entry).strip(); source_id = '__infer__'
-                if quote:
-                    evidence.append({'quote': quote, 'sourceId': source_id})
+                    quote = str(entry).strip()
+                if quote and quote not in evidence:
+                    evidence.append(quote)
             rationale = str(raw.get('correctRationale') or raw.get('rationale') or '').strip()
             primary_section = str(raw.get('primarySectionId') or '').strip()
-            section_ids = raw.get('sectionIds') if isinstance(raw.get('sectionIds'), list) else []
-            if primary_section and primary_section not in section_ids:
-                section_ids = [primary_section, *section_ids]
             category = str(raw.get('category') or '').strip()
             if category not in CATEGORIES:
                 category = cls._infer_category(str(raw.get('question') or raw.get('stem') or ''))
-            concept_source = ''
-            if evidence:
-                # Hikari places the correct-answer evidence first, followed by
-                # supporting distractor evidence; it does not order quotes by
-                # the A/B/C/D option indexes.
-                concept_source = evidence[0]['quote']
-            concept = str(raw.get('concept') or raw.get('topic') or '').strip() or cls._concept_from_text(concept_source or str(raw.get('question') or ''))
-            option_rationales = []
-            for index, option in enumerate(option_texts):
-                option_evidence = evidence
-                if index == correct_index:
-                    explanation = rationale
-                elif rationale:
-                    explanation = rationale
+            raw_rationales = raw.get('optionRationales') or raw.get('rationales') or []
+            if not isinstance(raw_rationales, list):
+                raw_rationales = []
+            option_rationales: list[str] = []
+            for entry in raw_rationales:
+                if isinstance(entry, dict):
+                    explanation = str(entry.get('explanation') or entry.get('rationale') or entry.get('text') or '').strip()
                 else:
-                    explanation = f'{option} is not supported as the best answer by the supplied lecture evidence.'
-                option_rationales.append({'optionIndex': index, 'explanation': explanation, 'evidence': option_evidence})
+                    explanation = str(entry).strip()
+                if explanation:
+                    option_rationales.append(explanation)
+            if len(option_rationales) != 4:
+                fallback = rationale or 'This option is not supported as the best answer by the supplied lecture evidence.'
+                option_rationales = [fallback for _ in range(4)]
             items.append({
-                'mode': str(raw.get('mode') or 'clinical'),
                 'category': category,
                 'stem': str(raw.get('stem') or raw.get('question') or '').strip(),
                 'options': option_texts,
                 'correctIndex': correct_index,
-                'concept': concept,
-                'correctRationale': rationale,
-                'stemEvidence': evidence,
                 'optionRationales': option_rationales,
+                'evidenceQuotes': evidence,
                 'primarySectionId': primary_section,
-                'sectionIds': [str(value) for value in section_ids if str(value).strip()],
             })
-        return {'items': items}
+        return {'questions': items}
 
     @classmethod
     def _provider_correct_index(cls, value: Any, option_ids: list[str], option_texts: list[str], raw_options: list[Any], zero_based: bool = False) -> int:
