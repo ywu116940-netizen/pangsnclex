@@ -5,6 +5,8 @@ import difflib
 import json
 import os
 import re
+import threading
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -145,6 +147,8 @@ class HikariQuizGenerator:
         self.batch_size = max(5, min(int(os.environ.get('QUIZ_BATCH_SIZE', '10')), 20))
         self.max_workers = max(1, min(int(os.environ.get('QUIZ_MAX_CONCURRENCY', '4')), 5))
         self.batch_retries = max(1, min(int(os.environ.get('QUIZ_BATCH_RETRIES', '2')), 4))
+        self._telemetry_lock = threading.Lock()
+        self._reset_telemetry()
 
     def pipeline_info(self) -> dict[str, str]:
         return {
@@ -155,6 +159,8 @@ class HikariQuizGenerator:
         }
 
     def generate(self, sources: list[dict[str, Any]], count: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        self._reset_telemetry()
+        self._generation_started = time.perf_counter()
         requested = max(1, min(int(count or 1), self.max_count))
         chunks = self.prepare_chunks(sources)
         plans = self.build_coverage_plan(chunks, requested)
@@ -165,12 +171,16 @@ class HikariQuizGenerator:
         questions.extend(self._run_plans(plans, existing=[], failures=failures))
         questions = self._deduplicate(questions)
         replacement_round = 0
+        replacement_batch_count = 0
+        replacement_questions_requested = 0
         while len(questions) < requested and replacement_round < 3:
             before_replacement = len(questions)
             missing = requested - len(questions)
             replacement_plans = self.build_coverage_plan(chunks, missing, offset=replacement_round + len(plans))
             if not replacement_plans:
                 break
+            replacement_batch_count += len(replacement_plans)
+            replacement_questions_requested += missing
             questions.extend(self._run_plans(replacement_plans, existing=questions, failures=failures))
             questions = self._deduplicate(questions)
             replacement_round += 1
@@ -195,6 +205,11 @@ class HikariQuizGenerator:
             'batch_size': self.batch_size, 'concurrency': min(self.max_workers, len(plans)),
             'coverage': coverage, 'warnings': warnings, 'chunk_count': len(chunks),
             'failure_details': failures[:12],
+            'benchmark': self._telemetry_metadata(
+                initial_batch_count=len(plans),
+                replacement_batch_count=replacement_batch_count,
+                replacement_questions_requested=replacement_questions_requested,
+            ),
         }
         return [item.model_dump(mode='json') for item in questions], metadata
 
@@ -406,6 +421,9 @@ class HikariQuizGenerator:
             result = self._call_structured(
                 'nclex_quiz_batch', SYSTEM_PROMPT, user_prompt, QuizResponse,
                 max(4000, remaining_count * 900),
+                batch_index=plan.index + 1,
+                generation_attempt=attempt + 1,
+                requested_questions=remaining_count,
             )
             attempt_plan = BatchPlan(plan.index, remaining_count, plan.chunks, remaining_quotas)
             valid, errors = self._validate_items(result.items, attempt_plan, [*existing, *accepted])
@@ -413,6 +431,8 @@ class HikariQuizGenerator:
             accepted = self._deduplicate(accepted)
             if not errors and len(result.items) != remaining_count:
                 errors.append(f'Expected {remaining_count} questions, received {len(result.items)}.')
+            if errors:
+                self._record_validation_errors(plan.index + 1, attempt + 1, errors)
             last_error = ValueError('; '.join(errors[:4]) or f'{remaining_count - len(valid)} question(s) were missing.')
         if accepted:
             return accepted
@@ -545,29 +565,155 @@ class HikariQuizGenerator:
         match = re.search(pattern, source_text, flags=re.UNICODE)
         return source_text[match.start():match.end()] if match else None
 
-    def _call_structured(self, name: str, system_prompt: str, user_prompt: str, model_type: type[BaseModel], max_output_tokens: int) -> BaseModel:
+    def _call_structured(
+        self, name: str, system_prompt: str, user_prompt: str,
+        model_type: type[BaseModel], max_output_tokens: int,
+        batch_index: int | None = None, generation_attempt: int | None = None,
+        requested_questions: int | None = None,
+    ) -> BaseModel:
         schema = model_type.model_json_schema(); self._make_schema_strict(schema)
         last_error: Exception | None = None
         for attempt in range(3):
             retry_note = '' if attempt == 0 else '\n\nPrevious output failed local schema validation. Correct the JSON and return the complete schema, with no prose.'
             payload = {'model': self.model, 'input': [{'role': 'system', 'content': [{'type': 'input_text', 'text': system_prompt}]}, {'role': 'user', 'content': [{'type': 'input_text', 'text': user_prompt + retry_note}]}], 'temperature': 0.1, 'max_output_tokens': max_output_tokens, 'text': {'format': {'type': 'json_schema', 'name': name, 'strict': True, 'schema': schema}}}
             request = urllib.request.Request(self.base_url + '/responses', data=json.dumps(payload, ensure_ascii=False).encode(), headers={'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json'}, method='POST')
+            event = self._start_provider_call(name, batch_index, generation_attempt, attempt + 1, requested_questions)
+            outcome = 'request_error'; usage: dict[str, int] = {}
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     response_data = json.loads(response.read())
+                usage = self._usage_from_response(response_data)
                 structured = json.loads(self._response_text(response_data))
                 if model_type is QuizResponse:
                     structured = self._normalise_quiz_payload(structured)
-                return model_type.model_validate(structured)
+                result = model_type.model_validate(structured)
+                outcome = 'success'
+                return result
             except urllib.error.HTTPError as exc:
+                outcome = 'http_error'
                 detail = exc.read().decode(errors='replace')[:800]
                 raise ValueError(f'Hikari {name} request failed ({exc.code}): {detail}') from exc
             except urllib.error.URLError as exc:
+                outcome = 'connection_error'
                 raise ValueError(f'Hikari {name} request could not connect: {exc.reason}') from exc
             except (json.JSONDecodeError, ValidationError) as exc:
+                outcome = 'schema_error'
                 last_error = exc
+            finally:
+                self._finish_provider_call(event, outcome, usage)
         detail = str(last_error).replace('\n', ' ')[:500] if last_error else 'unknown schema error'
         raise ValueError(f'Hikari {name} failed schema validation after 3 attempts: {detail}') from last_error
+
+    def _reset_telemetry(self) -> None:
+        self._generation_started = 0.0
+        self._provider_calls: list[dict[str, Any]] = []
+        self._validation_events: list[dict[str, Any]] = []
+        self._active_generator_calls = 0
+        self._max_active_generator_calls = 0
+        self._provider_request_sequence = 0
+
+    def _start_provider_call(
+        self, name: str, batch_index: int | None, generation_attempt: int | None,
+        schema_attempt: int, requested_questions: int | None,
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        with self._telemetry_lock:
+            self._provider_request_sequence += 1
+            request_number = self._provider_request_sequence
+            if name == 'nclex_quiz_batch':
+                self._active_generator_calls += 1
+                self._max_active_generator_calls = max(self._max_active_generator_calls, self._active_generator_calls)
+        return {
+            'request_number': request_number, 'name': name,
+            'batch_index': batch_index, 'generation_attempt': generation_attempt,
+            'schema_attempt': schema_attempt, 'requested_questions': requested_questions,
+            '_started': started,
+            'started_seconds': round(started - self._generation_started, 3) if self._generation_started else None,
+        }
+
+    def _finish_provider_call(self, event: dict[str, Any], outcome: str, usage: dict[str, int]) -> None:
+        finished = time.perf_counter()
+        record = {key: value for key, value in event.items() if not key.startswith('_')}
+        record.update({
+            'duration_seconds': round(finished - event['_started'], 3),
+            'finished_seconds': round(finished - self._generation_started, 3) if self._generation_started else None,
+            'status': outcome,
+            **usage,
+        })
+        with self._telemetry_lock:
+            if event['name'] == 'nclex_quiz_batch':
+                self._active_generator_calls = max(0, self._active_generator_calls - 1)
+            self._provider_calls.append(record)
+
+    def _record_validation_errors(self, batch_index: int, generation_attempt: int, errors: list[str]) -> None:
+        with self._telemetry_lock:
+            self._validation_events.append({
+                'batch_index': batch_index,
+                'generation_attempt': generation_attempt,
+                'count': len(errors),
+                'errors': errors[:6],
+            })
+
+    @staticmethod
+    def _usage_from_response(response: dict[str, Any]) -> dict[str, int]:
+        usage = response.get('usage') if isinstance(response.get('usage'), dict) else {}
+        result: dict[str, int] = {}
+        aliases = {
+            'input_tokens': ('input_tokens', 'prompt_tokens'),
+            'output_tokens': ('output_tokens', 'completion_tokens'),
+            'total_tokens': ('total_tokens',),
+        }
+        for target, keys in aliases.items():
+            for key in keys:
+                if isinstance(usage.get(key), int):
+                    result[target] = usage[key]
+                    break
+        return result
+
+    def _telemetry_metadata(
+        self, initial_batch_count: int, replacement_batch_count: int,
+        replacement_questions_requested: int,
+    ) -> dict[str, Any]:
+        with self._telemetry_lock:
+            calls = sorted(
+                (dict(call) for call in self._provider_calls if call.get('name') == 'nclex_quiz_batch'),
+                key=lambda call: call['request_number'],
+            )
+            validation_events = [dict(event) for event in self._validation_events]
+            max_concurrency = self._max_active_generator_calls
+        batches: list[dict[str, Any]] = []
+        batch_indexes = sorted({call['batch_index'] for call in calls if call.get('batch_index') is not None})
+        for batch_index in batch_indexes:
+            batch_calls = [call for call in calls if call.get('batch_index') == batch_index]
+            batches.append({
+                'batch_index': batch_index,
+                'elapsed_seconds': round(max(call['finished_seconds'] for call in batch_calls) - min(call['started_seconds'] for call in batch_calls), 3),
+                'provider_requests': len(batch_calls),
+                'requested_questions': [call.get('requested_questions') for call in batch_calls],
+                'statuses': [call.get('status') for call in batch_calls],
+            })
+        usage_available = any('input_tokens' in call or 'output_tokens' in call for call in calls)
+        return {
+            'total_generation_seconds': round(time.perf_counter() - self._generation_started, 3),
+            'generator_request_count': len(calls),
+            'max_observed_concurrency': max_concurrency,
+            'initial_batch_count': initial_batch_count,
+            'replacement_batch_count': replacement_batch_count,
+            'replacement_questions_requested': replacement_questions_requested,
+            'schema_retry_requests': sum(1 for call in calls if (call.get('schema_attempt') or 1) > 1),
+            'batch_retry_attempts': len({
+                (call.get('batch_index'), call.get('generation_attempt'))
+                for call in calls if (call.get('generation_attempt') or 1) > 1
+            }),
+            'validation_error_count': sum(event.get('count', 0) for event in validation_events),
+            'usage_available': usage_available,
+            'input_tokens': sum(call.get('input_tokens', 0) for call in calls) if usage_available else None,
+            'output_tokens': sum(call.get('output_tokens', 0) for call in calls) if usage_available else None,
+            'total_tokens': sum(call.get('total_tokens', 0) for call in calls) if usage_available else None,
+            'batches': batches,
+            'provider_calls': calls,
+            'validation_events': validation_events,
+        }
 
     @classmethod
     def _normalise_quiz_payload(cls, payload: Any) -> Any:
