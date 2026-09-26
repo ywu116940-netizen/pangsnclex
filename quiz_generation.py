@@ -166,8 +166,10 @@ Each question must have four distinct options, one best answer, exactly four opt
 in A-D order, and exact evidence quotes copied from the supplied chunks. Follow sectionQuotas by
 grounding each question's evidence in its assigned section; the backend derives primarySectionId,
 the correct rationale, and the concept from the validated evidence. Put evidence quotes only once
-at question level. Use different concepts and question angles within a batch. Keep wording concise
-and return one complete JSON object only."""
+at question level. Evidence quotes must be meaningful source spans of at least 12 characters and
+two words; never use an isolated term or label such as "Depression" or "bowel". Use different
+concepts and question angles within a batch. Keep wording concise and return one complete JSON
+object only."""
 
 
 EXTRACTOR_PROMPT = """You are a medical-document extraction editor. Convert the supplied source
@@ -218,11 +220,12 @@ class HikariQuizGenerator:
             raise ValueError('The selected material does not contain enough readable content for question generation.')
         questions: list[Question] = []
         failures: list[str] = []
-        questions.extend(self._run_plans(plans, existing=[], failures=failures))
+        questions.extend(self._run_plans(plans, existing=[], failures=failures, replacement=False))
         questions = self._deduplicate(questions)
         replacement_round = 0
         replacement_batch_count = 0
         replacement_questions_requested = 0
+        replacement_questions_generated = 0
         while len(questions) < requested and replacement_round < 3:
             before_replacement = len(questions)
             missing = requested - len(questions)
@@ -231,7 +234,9 @@ class HikariQuizGenerator:
                 break
             replacement_batch_count += len(replacement_plans)
             replacement_questions_requested += missing
-            questions.extend(self._run_plans(replacement_plans, existing=questions, failures=failures))
+            replacement_items = self._run_plans(replacement_plans, existing=questions, failures=failures, replacement=True)
+            replacement_questions_generated += len(replacement_items)
+            questions.extend(replacement_items)
             questions = self._deduplicate(questions)
             replacement_round += 1
             # Do not make the user wait through two more identical replacement
@@ -259,6 +264,7 @@ class HikariQuizGenerator:
                 initial_batch_count=len(plans),
                 replacement_batch_count=replacement_batch_count,
                 replacement_questions_requested=replacement_questions_requested,
+                replacement_questions_generated=replacement_questions_generated,
             ),
         }
         return [item.model_dump(mode='json') for item in questions], metadata
@@ -435,10 +441,12 @@ class HikariQuizGenerator:
                 plans.append(BatchPlan(offset + index, batch_size, selected, quotas))
         return plans
 
-    def _run_plans(self, plans: list[BatchPlan], existing: list[Question], failures: list[str]) -> list[Question]:
+    def _run_plans(
+        self, plans: list[BatchPlan], existing: list[Question], failures: list[str], replacement: bool,
+    ) -> list[Question]:
         accepted: list[Question] = []
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(plans)), thread_name_prefix='hikari-quiz') as executor:
-            futures = {executor.submit(self._generate_batch, plan, existing): plan for plan in plans}
+            futures = {executor.submit(self._generate_batch, plan, existing, replacement): plan for plan in plans}
             for future in as_completed(futures):
                 plan = futures[future]
                 try:
@@ -447,9 +455,11 @@ class HikariQuizGenerator:
                     failures.append(f'batch {plan.index + 1}: {exc}')
         return accepted
 
-    def _generate_batch(self, plan: BatchPlan, existing: list[Question]) -> list[Question]:
+    def _generate_batch(self, plan: BatchPlan, existing: list[Question], replacement: bool = False) -> list[Question]:
         chunk_payload = [self._compact_chunk(chunk) for chunk in plan.chunks]
-        existing_hint = '' if not existing else '\nDo not repeat these existing stems or concepts:\n' + json.dumps([{'stem': item.stem, 'concept': item.concept} for item in existing[-80:]], ensure_ascii=False)
+        existing_hint = '' if not existing else '\nDo not repeat these existing stems or concepts:\n' + json.dumps(
+            [{'stem': item.stem, 'concept': item.concept} for item in existing[-20:]], ensure_ascii=False
+        )
         base_prompt = f'Generate distinct questions for batch {plan.index + 1}. Follow sectionQuotas exactly using primarySectionId. Keep evidence quotes verbatim and include all sectionId(s) used. Never fill gaps with outside knowledge.\n\n'
         last_error: Exception | None = None
         accepted: list[Question] = []
@@ -462,11 +472,12 @@ class HikariQuizGenerator:
             accepted_hint = '' if not accepted else '\nDo not repeat these questions already accepted from this batch:\n' + json.dumps(
                 [{'stem': item.stem, 'concept': item.concept} for item in accepted], ensure_ascii=False
             )
+            rejection_hint = self._rejection_hint(plan, replacement)
             user_prompt = (
                 base_prompt
                 + f'Return exactly {remaining_count} questions.\n\n'
                 + json.dumps({'sectionQuotas': remaining_quotas, 'chunks': chunk_payload}, ensure_ascii=False)
-                + existing_hint + accepted_hint + retry_note
+                + existing_hint + accepted_hint + rejection_hint + retry_note
             )
             result = self._call_structured(
                 'nclex_quiz_batch', SYSTEM_PROMPT, user_prompt, CompactQuizResponse,
@@ -474,12 +485,30 @@ class HikariQuizGenerator:
                 batch_index=plan.index + 1,
                 generation_attempt=attempt + 1,
                 requested_questions=remaining_count,
+                replacement=replacement,
             )
-            generated_items = [self._expand_compact_question(item) for item in result.questions]
+            generated_items: list[Question] = []
+            expansion_errors: list[str] = []
+            for index, compact_item in enumerate(result.questions, 1):
+                try:
+                    generated_items.append(self._expand_compact_question(compact_item))
+                except (ValueError, ValidationError) as exc:
+                    reason = f'Question {index}: {exc}'
+                    expansion_errors.append(reason)
+                    self._record_rejection(
+                        reason=reason,
+                        stem=compact_item.stem,
+                        concept=self._concept_from_text(compact_item.evidenceQuotes[0]) if compact_item.evidenceQuotes else None,
+                        section=None,
+                        evidence=compact_item.evidenceQuotes,
+                        batch_index=plan.index + 1,
+                        generation_attempt=attempt + 1,
+                    )
             attempt_plan = BatchPlan(plan.index, remaining_count, plan.chunks, remaining_quotas)
-            valid, errors = self._validate_items(generated_items, attempt_plan, [*existing, *accepted])
+            valid, errors = self._validate_items(generated_items, attempt_plan, [*existing, *accepted], attempt + 1)
             accepted.extend(valid)
             accepted = self._deduplicate(accepted)
+            errors = [*expansion_errors, *errors]
             if not errors and len(generated_items) != remaining_count:
                 errors.append(f'Expected {remaining_count} questions, received {len(generated_items)}.')
             if errors:
@@ -500,7 +529,9 @@ class HikariQuizGenerator:
             if count - used.get(section_id, 0) > 0
         }
 
-    def _validate_items(self, items: list[Question], plan: BatchPlan, existing: list[Question]) -> tuple[list[Question], list[str]]:
+    def _validate_items(
+        self, items: list[Question], plan: BatchPlan, existing: list[Question], generation_attempt: int | None = None,
+    ) -> tuple[list[Question], list[str]]:
         """Keep valid questions even when another item in the same provider response fails."""
         accepted: list[Question] = []
         errors: list[str] = []
@@ -509,10 +540,14 @@ class HikariQuizGenerator:
             try:
                 self._assign_question_sections(item, plan, remaining)
             except ValueError as exc:
-                errors.append(f'Question {index}: {exc}')
+                reason = f'Question {index}: {exc}'
+                errors.append(reason)
+                self._record_rejection(reason, item.stem, item.concept, item.primarySectionId, [entry.quote for entry in item.stemEvidence], plan.index + 1, generation_attempt)
                 continue
             if item.primarySectionId not in remaining or remaining[item.primarySectionId] <= 0:
-                errors.append(f'Question {index}: section quota exceeded or unknown primarySectionId.')
+                reason = f'Question {index}: section quota exceeded or unknown primarySectionId.'
+                errors.append(reason)
+                self._record_rejection(reason, item.stem, item.concept, item.primarySectionId, [entry.quote for entry in item.stemEvidence], plan.index + 1, generation_attempt)
                 continue
             item_plan = BatchPlan(plan.index, 1, plan.chunks, {item.primarySectionId: 1})
             try:
@@ -520,8 +555,33 @@ class HikariQuizGenerator:
                 accepted.append(item)
                 remaining[item.primarySectionId] -= 1
             except (ValueError, ValidationError) as exc:
-                errors.append(f'Question {index}: {exc}')
+                reason = f'Question {index}: {exc}'
+                errors.append(reason)
+                self._record_rejection(reason, item.stem, item.concept, item.primarySectionId, [entry.quote for entry in item.stemEvidence], plan.index + 1, generation_attempt)
         return accepted, errors
+
+    def _rejection_hint(self, plan: BatchPlan, replacement: bool = False) -> str:
+        with self._telemetry_lock:
+            records = [dict(item) for item in self._rejected_questions]
+        if replacement:
+            relevant = records[-12:]
+        else:
+            relevant = [
+                item for item in records
+                if item.get('batch_index') == plan.index + 1
+                or item.get('section') in plan.section_quotas
+                or (item.get('section') is None and item.get('batch_index') == plan.index + 1)
+            ][-12:]
+        if not relevant:
+            return ''
+        compact = [
+            {
+                'stem': item.get('stem'), 'concept': item.get('concept'),
+                'section': item.get('section'), 'evidence': (item.get('evidence') or [])[:3],
+            }
+            for item in relevant
+        ]
+        return '\nAvoid these rejected questions and evidence spans; create different replacements:\n' + json.dumps(compact, ensure_ascii=False)
 
     def _assign_question_sections(self, item: Question, plan: BatchPlan, remaining: dict[str, int]) -> None:
         """Derive section metadata from exact evidence instead of model-generated IDs."""
@@ -663,11 +723,11 @@ class HikariQuizGenerator:
 
     @staticmethod
     def _canonical_quote(source_text: str, quote: str) -> str | None:
+        compact_quote = ' '.join(quote.split())
+        if len(compact_quote) < 12 or len(re.findall(r'\w+', compact_quote, flags=re.UNICODE)) < 2:
+            return None
         if quote in source_text:
             return quote
-        compact_quote = ' '.join(quote.split())
-        if not compact_quote:
-            return None
         pattern = r'\s+'.join(re.escape(part) for part in compact_quote.split())
         match = re.search(pattern, source_text, flags=re.UNICODE)
         return source_text[match.start():match.end()] if match else None
@@ -676,7 +736,7 @@ class HikariQuizGenerator:
         self, name: str, system_prompt: str, user_prompt: str,
         model_type: type[BaseModel], max_output_tokens: int,
         batch_index: int | None = None, generation_attempt: int | None = None,
-        requested_questions: int | None = None,
+        requested_questions: int | None = None, replacement: bool = False,
     ) -> BaseModel:
         schema = model_type.model_json_schema(); self._make_schema_strict(schema)
         last_error: Exception | None = None
@@ -685,7 +745,7 @@ class HikariQuizGenerator:
             retry_note = '' if attempt == 0 else '\n\nThe previous response was incomplete or invalid JSON. Return one complete JSON object matching the schema exactly. Keep every field concise, include the exact requested question count, and do not use markdown.'
             payload = {'model': self.model, 'input': [{'role': 'system', 'content': [{'type': 'input_text', 'text': system_prompt}]}, {'role': 'user', 'content': [{'type': 'input_text', 'text': user_prompt + retry_note}]}], 'temperature': 0.1, 'max_output_tokens': max_output_tokens, 'text': {'format': {'type': 'json_schema', 'name': name, 'strict': True, 'schema': schema}}}
             request = urllib.request.Request(self.base_url + '/responses', data=json.dumps(payload, ensure_ascii=False).encode(), headers={'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json'}, method='POST')
-            event = self._start_provider_call(name, batch_index, generation_attempt, attempt + 1, requested_questions)
+            event = self._start_provider_call(name, batch_index, generation_attempt, attempt + 1, requested_questions, replacement)
             outcome = 'request_error'; usage: dict[str, int] = {}
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -719,13 +779,14 @@ class HikariQuizGenerator:
         self._generation_started = 0.0
         self._provider_calls: list[dict[str, Any]] = []
         self._validation_events: list[dict[str, Any]] = []
+        self._rejected_questions: list[dict[str, Any]] = []
         self._active_generator_calls = 0
         self._max_active_generator_calls = 0
         self._provider_request_sequence = 0
 
     def _start_provider_call(
         self, name: str, batch_index: int | None, generation_attempt: int | None,
-        schema_attempt: int, requested_questions: int | None,
+        schema_attempt: int, requested_questions: int | None, replacement: bool = False,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         with self._telemetry_lock:
@@ -738,6 +799,7 @@ class HikariQuizGenerator:
             'request_number': request_number, 'name': name,
             'batch_index': batch_index, 'generation_attempt': generation_attempt,
             'schema_attempt': schema_attempt, 'requested_questions': requested_questions,
+            'replacement': replacement,
             '_started': started,
             'started_seconds': round(started - self._generation_started, 3) if self._generation_started else None,
         }
@@ -765,6 +827,21 @@ class HikariQuizGenerator:
                 'errors': errors[:6],
             })
 
+    def _record_rejection(
+        self, reason: str, stem: str | None, concept: str | None, section: str | None,
+        evidence: list[str], batch_index: int | None, generation_attempt: int | None,
+    ) -> None:
+        with self._telemetry_lock:
+            self._rejected_questions.append({
+                'reason': reason[:500],
+                'stem': (stem or '')[:240],
+                'concept': (concept or '')[:160] or None,
+                'section': section,
+                'evidence': [str(value)[:240] for value in evidence[:4]],
+                'batch_index': batch_index,
+                'generation_attempt': generation_attempt,
+            })
+
     @staticmethod
     def _usage_from_response(response: dict[str, Any]) -> dict[str, int]:
         usage = response.get('usage') if isinstance(response.get('usage'), dict) else {}
@@ -783,7 +860,7 @@ class HikariQuizGenerator:
 
     def _telemetry_metadata(
         self, initial_batch_count: int, replacement_batch_count: int,
-        replacement_questions_requested: int,
+        replacement_questions_requested: int, replacement_questions_generated: int,
     ) -> dict[str, Any]:
         with self._telemetry_lock:
             calls = sorted(
@@ -791,6 +868,7 @@ class HikariQuizGenerator:
                 key=lambda call: call['request_number'],
             )
             validation_events = [dict(event) for event in self._validation_events]
+            rejected_questions = [dict(item) for item in self._rejected_questions]
             max_concurrency = self._max_active_generator_calls
         batches: list[dict[str, Any]] = []
         batch_indexes = sorted({call['batch_index'] for call in calls if call.get('batch_index') is not None})
@@ -804,6 +882,8 @@ class HikariQuizGenerator:
                 'statuses': [call.get('status') for call in batch_calls],
             })
         usage_available = any('input_tokens' in call or 'output_tokens' in call for call in calls)
+        replacement_calls = [call for call in calls if call.get('replacement')]
+        replacement_usage_available = any('input_tokens' in call or 'output_tokens' in call for call in replacement_calls)
         return {
             'total_generation_seconds': round(time.perf_counter() - self._generation_started, 3),
             'generator_request_count': len(calls),
@@ -811,6 +891,7 @@ class HikariQuizGenerator:
             'initial_batch_count': initial_batch_count,
             'replacement_batch_count': replacement_batch_count,
             'replacement_questions_requested': replacement_questions_requested,
+            'replacement_questions_generated': replacement_questions_generated,
             'schema_retry_requests': sum(1 for call in calls if (call.get('schema_attempt') or 1) > 1),
             'incomplete_json_count': sum(1 for call in calls if call.get('status') == 'incomplete_json'),
             'schema_validation_error_count': sum(1 for call in calls if call.get('status') == 'schema_validation_error'),
@@ -819,6 +900,14 @@ class HikariQuizGenerator:
                 for call in calls if (call.get('generation_attempt') or 1) > 1
             }),
             'validation_error_count': sum(event.get('count', 0) for event in validation_events),
+            'rejected_question_count': len(rejected_questions),
+            'rejection_reasons': [item.get('reason') for item in rejected_questions],
+            'rejected_questions': rejected_questions,
+            'replacement_request_count': len(replacement_calls),
+            'replacement_duration_seconds': round(sum(call.get('duration_seconds', 0) for call in replacement_calls), 3),
+            'replacement_input_tokens': sum(call.get('input_tokens', 0) for call in replacement_calls) if replacement_usage_available else None,
+            'replacement_output_tokens': sum(call.get('output_tokens', 0) for call in replacement_calls) if replacement_usage_available else None,
+            'replacement_total_tokens': sum(call.get('total_tokens', 0) for call in replacement_calls) if replacement_usage_available else None,
             'usage_available': usage_available,
             'input_tokens': sum(call.get('input_tokens', 0) for call in calls) if usage_available else None,
             'output_tokens': sum(call.get('output_tokens', 0) for call in calls) if usage_available else None,
