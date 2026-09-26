@@ -78,7 +78,7 @@ class Question(BaseModel):
     concept: str = Field(min_length=2)
     correctRationale: str = Field(min_length=20)
     stemEvidence: list[Evidence] = Field(min_length=1)
-    optionRationales: list[OptionRationale] = Field(min_length=4, max_length=8)
+    optionRationales: list[OptionRationale] = Field(default_factory=list, max_length=8)
     primarySectionId: str = Field(min_length=1)
     sectionIds: list[str] = Field(default_factory=list, max_length=20)
 
@@ -104,6 +104,13 @@ class Question(BaseModel):
             raise ValueError('Options must be distinct.')
         return value
 
+    @field_validator('optionRationales')
+    @classmethod
+    def legacy_or_empty_rationales(cls, value: list[OptionRationale]) -> list[OptionRationale]:
+        if value and len(value) < 4:
+            raise ValueError('Option rationales must be empty or contain the complete legacy set.')
+        return value
+
 
 class QuizResponse(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
@@ -119,7 +126,7 @@ class CompactQuestion(BaseModel):
     stem: str = Field(min_length=30)
     options: list[str] = Field(min_length=4, max_length=4)
     correctIndex: int = Field(ge=0, le=3)
-    optionRationales: list[str] = Field(min_length=4, max_length=4)
+    correctRationale: str = Field(min_length=20)
     evidenceQuotes: list[str] = Field(min_length=1, max_length=12)
 
     @field_validator('category')
@@ -144,14 +151,6 @@ class CompactQuestion(BaseModel):
             raise ValueError('correctIndex must refer to an option.')
         return value
 
-    @field_validator('optionRationales')
-    @classmethod
-    def complete_rationales(cls, value: list[str]) -> list[str]:
-        if any(len(item.strip()) < 10 for item in value):
-            raise ValueError('Every option requires a specific rationale.')
-        return value
-
-
 class CompactQuizResponse(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
 
@@ -162,10 +161,13 @@ SYSTEM_PROMPT = """You are an expert NCLEX-RN item writer and clinical fact chec
 Write only defensible questions grounded in the supplied lecture chunks. Never use outside
 medical facts, even if generally true. Use a balanced mix of PRIORITY ASSESSMENT, PATIENT
 EDUCATION & SAFETY, and PHYSICAL ASSESSMENT & CUE MAPPING. Do not write SATA questions.
-Each question must have four distinct options, one best answer, exactly four option rationales
-in A-D order, and exact evidence quotes copied from the supplied chunks. Follow sectionQuotas by
+Each question must have four distinct options, exactly one correctIndex identifying the best
+answer, one concise but useful nursing/NCLEX rationale explaining why that answer is correct,
+and exact evidence quotes copied from the supplied chunks. The rationale must explain the
+clinical reasoning rather than merely restating the answer. Do not generate distractor rationales.
+Follow sectionQuotas by
 grounding each question's evidence in its assigned section; the backend derives primarySectionId,
-the correct rationale, and the concept from the validated evidence. Put evidence quotes only once
+the concept, and section metadata from the validated evidence. Put evidence quotes only once
 at question level. Evidence quotes must be meaningful source spans of at least 12 characters and
 two words; never use an isolated term or label such as "Depression" or "bowel". Use different
 concepts and question angles within a batch. Keep wording concise and return one complete JSON
@@ -624,16 +626,9 @@ class HikariQuizGenerator:
         return Question(
             mode='clinical', category=item.category, stem=item.stem,
             options=item.options, correctIndex=item.correctIndex,
-            concept=concept, correctRationale=item.optionRationales[item.correctIndex],
+            concept=concept, correctRationale=item.correctRationale,
             stemEvidence=[entry.model_copy(deep=True) for entry in evidence],
-            optionRationales=[
-                OptionRationale(
-                    optionIndex=index,
-                    explanation=item.optionRationales[index],
-                    evidence=[entry.model_copy(deep=True) for entry in evidence],
-                )
-                for index in range(4)
-            ],
+            optionRationales=[],
             primarySectionId='__infer_section__',
             sectionIds=[],
         )
@@ -655,9 +650,11 @@ class HikariQuizGenerator:
                 if concept_key == self._normalise(prior.concept) and difflib.SequenceMatcher(None, stem_key, self._normalise(prior.stem)).ratio() >= 0.58:
                     raise ValueError('Duplicate concept detected against an earlier batch.')
             stems.add(stem_key); concepts.add(concept_key)
+            if not item.correctRationale.strip() or len(item.correctRationale.strip()) < 20:
+                raise ValueError('Every question needs a useful correct-answer rationale.')
             rationale_indexes = sorted(rationale.optionIndex for rationale in item.optionRationales)
-            if rationale_indexes != list(range(len(item.options))):
-                raise ValueError('Every answer option must have exactly one rationale.')
+            if rationale_indexes and rationale_indexes != list(range(len(item.options))):
+                raise ValueError('Legacy option rationales must include exactly one rationale per option.')
             evidence = item.stemEvidence + [entry for rationale in item.optionRationales for entry in rationale.evidence]
             if not evidence:
                 raise ValueError('Every question needs source evidence.')
@@ -969,15 +966,14 @@ class HikariQuizGenerator:
                     explanation = str(entry).strip()
                 if explanation:
                     option_rationales.append(explanation)
-            if len(option_rationales) != 4:
-                fallback = rationale or 'This option is not supported as the best answer by the supplied lecture evidence.'
-                option_rationales = [fallback for _ in range(4)]
+            if not rationale and len(option_rationales) == 4 and 0 <= correct_index < 4:
+                rationale = option_rationales[correct_index]
             items.append({
                 'category': category,
                 'stem': str(raw.get('stem') or raw.get('question') or '').strip(),
                 'options': option_texts,
                 'correctIndex': correct_index,
-                'optionRationales': option_rationales,
+                'correctRationale': rationale,
                 'evidenceQuotes': evidence,
             })
         return {'questions': items}
