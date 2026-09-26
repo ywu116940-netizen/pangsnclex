@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import base64
+import hashlib
 import json, mimetypes, os, re
 import tempfile
 from datetime import datetime, timezone
@@ -66,6 +67,25 @@ class SupabaseStore:
     def list_modules(self):
         query = urllib.parse.urlencode({'select': '*', 'order': 'updated_at.desc'})
         return self._request('/rest/v1/modules?' + query) or []
+
+    def get_module(self, module_id):
+        rows = self._request(self._module_path(module_id) + '&select=*') or []
+        return rows[0] if rows else None
+
+    def list_question_bank_questions(self, module_id):
+        query = urllib.parse.urlencode({
+            'module_id': f'eq.{module_id}', 'select': '*', 'order': 'created_at.asc',
+        })
+        return self._request('/rest/v1/question_bank_questions?' + query) or []
+
+    def insert_question_bank_questions(self, rows):
+        if not rows:
+            return []
+        response = self._request(
+            '/rest/v1/question_bank_questions', method='POST', payload=rows,
+            headers={'Prefer': 'return=representation'},
+        )
+        return response if isinstance(response, list) else [response]
 
     def create_module(self, module):
         response = self._request(
@@ -155,6 +175,65 @@ def module_for_browser(row):
         'demo': False,
     }
 
+
+def source_revision(module):
+    payload = {
+        'source_text': module.get('source_text') or '',
+        'structured_sections': module.get('structured_sections') if isinstance(module.get('structured_sections'), list) else [],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def normalise_question_stem(value):
+    return re.sub(r'[^a-z0-9]+', ' ', str(value or '').casefold()).strip()
+
+
+def question_row(question, module_id, revision):
+    option_rationales = question.get('optionRationales')
+    if not isinstance(option_rationales, list):
+        option_rationales = []
+    return {
+        'module_id': str(module_id),
+        'stem': str(question.get('stem') or '').strip(),
+        'options': question.get('options') if isinstance(question.get('options'), list) else [],
+        'correct_index': int(question.get('correctIndex', 0)),
+        'correct_rationale': str(question.get('correctRationale') or '').strip(),
+        'stem_evidence': question.get('stemEvidence') if isinstance(question.get('stemEvidence'), list) else [],
+        'option_rationales': option_rationales,
+        'category': str(question.get('category') or '').strip(),
+        'concept': str(question.get('concept') or '').strip(),
+        'primary_section_id': str(question.get('primarySectionId') or '').strip(),
+        'section_ids': question.get('sectionIds') if isinstance(question.get('sectionIds'), list) else [],
+        'source_revision': revision,
+        'normalized_stem': normalise_question_stem(question.get('stem')),
+    }
+
+
+def question_for_browser(row):
+    return {
+        'mode': row.get('mode') or 'clinical',
+        'stem': row.get('stem') or '',
+        'options': row.get('options') if isinstance(row.get('options'), list) else [],
+        'correctIndex': row.get('correct_index', 0),
+        'correctRationale': row.get('correct_rationale') or '',
+        'stemEvidence': row.get('stem_evidence') if isinstance(row.get('stem_evidence'), list) else [],
+        'optionRationales': row.get('option_rationales') if isinstance(row.get('option_rationales'), list) else [],
+        'category': row.get('category') or '',
+        'concept': row.get('concept') or '',
+        'primarySectionId': row.get('primary_section_id') or '',
+        'sectionIds': row.get('section_ids') if isinstance(row.get('section_ids'), list) else [],
+    }
+
+
+def question_module_id_and_action(path):
+    parts = [urllib.parse.unquote(part) for part in path.split('/') if part]
+    if len(parts) == 4 and parts[:2] == ['api', 'modules'] and parts[3] in {'questions', 'generate'}:
+        return parts[2], parts[3]
+    if len(parts) == 5 and parts[:2] == ['api', 'modules'] and parts[3] == 'questions' and parts[4] == 'generate':
+        return parts[2], 'generate'
+    return None, None
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -169,6 +248,22 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        module_id, action = question_module_id_and_action(parsed.path)
+        if module_id and action == 'questions':
+            try:
+                store = supabase_store(required=True)
+                module = store.get_module(module_id)
+                if not module:
+                    self._json({'error': 'Module was not found.'}, 404)
+                    return
+                rows = store.list_question_bank_questions(module_id)
+                self._json({
+                    'status': 'ready', 'module': module_for_browser(module),
+                    'count': len(rows), 'items': [question_for_browser(row) for row in rows],
+                })
+            except Exception as exc:
+                self._json({'error': str(exc)}, 503)
+            return
         if parsed.path == '/api/modules':
             try:
                 store = supabase_store(required=True)
@@ -187,6 +282,63 @@ class Handler(SimpleHTTPRequestHandler):
         try: body = json.loads(self.rfile.read(length) or '{}')
         except Exception: body = {}
         parsed = urllib.parse.urlparse(self.path)
+        module_id, action = question_module_id_and_action(parsed.path)
+        if module_id and action == 'generate':
+            try:
+                requested = int(body.get('count') or 0)
+            except (TypeError, ValueError):
+                requested = 0
+            max_count = getattr(configured_quiz_generator(), 'max_count', 100) if requested else 100
+            if requested < 1 or requested > max_count:
+                self._json({'error': f'Question count must be between 1 and {max_count}.'}, 400)
+                return
+            try:
+                store = supabase_store(required=True)
+                module = store.get_module(module_id)
+                if not module:
+                    self._json({'error': 'Module was not found.'}, 404)
+                    return
+                source_text = str(module.get('source_text') or '').strip()
+                if not source_text:
+                    self._json({'error': 'This module has no source material.'}, 400)
+                    return
+                generator = configured_quiz_generator()
+                if generator is None:
+                    self._json({'error': 'AI question generation is not configured. Set STUDYWELL_API_KEY and restart the server.'}, 503)
+                    return
+                sources = [{
+                    'id': str(module.get('id') or module_id),
+                    'name': str(module.get('name') or 'Study material'),
+                    'text': source_text,
+                    'structuredSections': module.get('structured_sections') if isinstance(module.get('structured_sections'), list) else [],
+                }]
+                generated, generation = generator.generate(sources, requested)
+                existing_rows = store.list_question_bank_questions(module_id)
+                existing_stems = {str(row.get('normalized_stem') or normalise_question_stem(row.get('stem'))) for row in existing_rows}
+                seen = set(existing_stems)
+                new_questions = []
+                duplicate_count = 0
+                for question in generated:
+                    key = normalise_question_stem(question.get('stem'))
+                    if not key or key in seen:
+                        duplicate_count += 1
+                        continue
+                    seen.add(key)
+                    new_questions.append(question)
+                revision = source_revision(module)
+                rows = [question_row(question, module_id, revision) for question in new_questions]
+                inserted_rows = store.insert_question_bank_questions(rows)
+                inserted_items = [question_for_browser(row) for row in inserted_rows]
+                total_count = len(existing_rows) + len(inserted_rows)
+                self._json({
+                    'status': 'ready', 'requested_count': requested,
+                    'generated_count': len(generated), 'inserted_count': len(inserted_rows),
+                    'duplicate_count': duplicate_count, 'total_count': total_count,
+                    'items': inserted_items, 'generation': generation,
+                })
+            except Exception as exc:
+                self._json({'error': f'Question bank generation failed: {exc}'}, 422)
+            return
         if parsed.path == '/api/modules':
             try:
                 store = supabase_store(required=True)
