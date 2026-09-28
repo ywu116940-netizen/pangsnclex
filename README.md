@@ -101,6 +101,30 @@ QUIZ_MAX_CONCURRENCY=4
 QUIZ_BATCH_RETRIES=2
 ```
 
+### Exemplar retrieval staging flag
+
+NCLEX exemplar retrieval is experimental and disabled by default. It only uses
+the original synthetic records in `benchmarks/nclex_exemplars.json`; official
+reference questions are not loaded or sent to the provider. Keep this enabled
+only in a development or staging deployment while comparing it with the
+notes-only path:
+
+```text
+STUDYWELL_ENV=staging
+STUDYWELL_USE_EXEMPLARS=true
+```
+
+Restart the server after changing environment variables. A request may override
+the staging flag for an A/B comparison by sending `use_exemplars: true` or
+`use_exemplars: false` to `/api/quiz/generate` or the module generation route.
+That request override is ignored outside development, staging, or test mode.
+When enabled, the blueprint classifies each item by `itemStyle`,
+`responseFormat`, `cognitiveLevel`, and `scenarioDensity`; the writer receives
+only one matching synthetic exemplar per item as a structural reference. The
+notes remain the sole authority for the tested concept, answer, and evidence.
+The generation telemetry records `exemplar_ids_used` and `exemplar_usage` for
+side-by-side ON/OFF comparison. Do not set this flag in production yet.
+
 如果 Hikari API key 已设置在 `OPENAI_API_KEY`，服务也会读取该变量。题目要求 JSON Schema 输出，校验选项、单选题类别及逐字原文证据；任何引用与所选材料不匹配的结果都会被拒绝。所选学习材料会发送给 Hikari 生成题目。AI 题目仍应对照可靠护理教材复核，不替代权威 NCLEX 备考资料。
 
 ## Supabase shared modules

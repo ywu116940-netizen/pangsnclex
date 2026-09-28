@@ -1,0 +1,126 @@
+{
+  "schema_version": "v3c-trusted-knowledge-1",
+  "authority": "Approved government and professional sources only",
+  "cases": {
+    "hearing-multiple-interventions-01": [
+      {
+        "sourceId": "cdc-hearing-communication",
+        "sourceName": "CDC hearing and communication guidance",
+        "url": "https://www.cdc.gov/hearing-loss/about/index.html",
+        "content": "CDC hearing-health information describes communication barriers in noisy environments and supports clear, face-to-face communication strategies. This context may enrich a patient interaction, but the student notes determine the tested intervention."
+      }
+    ],
+    "copd-respiratory-distress-01": [
+      {
+        "sourceId": "medlineplus-copd",
+        "sourceName": "MedlinePlus COPD overview",
+        "url": "https://medlineplus.gov/copd.html",
+        "content": "MedlinePlus describes COPD as a condition that can cause breathing difficulty and emphasizes recognizing changes in breathing and following the prescribed care plan. Use this only to make the respiratory setting realistic."
+      }
+    ],
+    "cardiovascular-assessment-01": [
+      {
+        "sourceId": "nih-heart-health",
+        "sourceName": "NIH heart and vascular health information",
+        "url": "https://www.nhlbi.nih.gov/health/heart-healthy-living",
+        "content": "NIH heart-health resources describe monitoring symptoms and communicating concerning changes to a healthcare professional. The external context may enrich assessment workflow without supplying a new keyed finding."
+      }
+    ],
+    "neurologic-assessment-01": [
+      {
+        "sourceId": "cdc-stroke-signs",
+        "sourceName": "CDC stroke signs and symptoms",
+        "url": "https://www.cdc.gov/stroke/signs_symptoms/index.html",
+        "content": "CDC stroke information emphasizes noticing sudden neurologic changes and seeking urgent help. This may enrich time-sensitive workflow cues, while the uploaded notes remain the authority for the assessed finding."
+      }
+    ],
+    "medication-safety-01": [
+      {
+        "sourceId": "fda-medication-errors",
+        "sourceName": "FDA medication safety information",
+        "url": "https://www.fda.gov/drugs/drug-safety-and-availability",
+        "content": "FDA medication-safety materials emphasize careful communication, label review, and resolving discrepancies before a medicine is given. Use only as workflow context; the notes define the tested safety decision."
+      }
+    ],
+    "inhaler-patient-teaching-01": [
+      {
+        "sourceId": "nih-inhaler-teaching",
+        "sourceName": "NHLBI asthma education",
+        "url": "https://www.nhlbi.nih.gov/health/asthma",
+        "content": "NHLBI asthma education supports teaching patients how to use prescribed inhaled therapies and checking understanding through practical instruction. It may enrich teaching workflow without adding a new treatment requirement."
+      }
+    ],
+    "fall-risk-first-action-01": [
+      {
+        "sourceId": "cdc-steadi-falls",
+        "sourceName": "CDC STEADI fall prevention resources",
+        "url": "https://www.cdc.gov/steadi/",
+        "content": "CDC STEADI resources support identifying fall risks, improving the care environment, and using safe mobility workflows. These details may enrich a transfer scenario but cannot replace the student-note answer."
+      }
+    ],
+    "postoperative-expected-unexpected-01": [
+      {
+        "sourceId": "nih-surgery-recovery",
+        "sourceName": "NCBI Bookshelf postoperative care reference",
+        "url": "https://www.ncbi.nlm.nih.gov/books/NBK560885/",
+        "content": "MedlinePlus recovery information describes observing a patient after surgery and reporting concerning changes. Use this for realistic monitoring context only; expected findings remain note-defined."
+      }
+    ],
+    "definition-heavy-source-01": [
+      {
+        "sourceId": "nih-health-information",
+        "sourceName": "NIH health information guidance",
+        "url": "https://www.nih.gov/health-information",
+        "content": "NIH health information resources distinguish general health concepts from patient-specific assessment and care decisions. This can enrich a clinical setting while the notes determine the examinable concept."
+      }
+    ],
+    "headings-exam-objectives-01": [
+      {
+        "sourceId": "cdc-health-communication",
+        "sourceName": "CDC health communication resources",
+        "url": "https://www.cdc.gov/health-literacy/php/about/index.html",
+        "content": "CDC health-communication resources emphasize understandable, patient-centered communication. This may enrich a communication scenario, but headings and objectives are not clinical evidence or testable answers."
+      }
+    ],
+    "insufficient-clinical-context-01": [
+      {
+        "sourceId": "medlineplus-hearing-loss",
+        "sourceName": "MedlinePlus hearing-loss information",
+        "url": "https://medlineplus.gov/hearingdisordersanddeafness.html",
+        "content": "MedlinePlus hearing information describes communication challenges and the value of adapting communication to the patient. Use this only to enrich a realistic interaction; do not invent a new intervention beyond the notes."
+      }
+    ],
+    "pain-related-interventions-01": [
+      {
+        "sourceId": "nih-pain-management",
+        "sourceName": "NIH pain management information",
+        "url": "https://www.ninds.nih.gov/health-information/disorders/pain",
+        "content": "NIH pain resources describe assessing pain, supporting comfort, and reassessing the patient's response. These workflow cues may enrich a scenario while the notes determine which intervention is tested."
+      }
+    ],
+    "sleep-hygiene-teaching-01": [
+      {
+        "sourceId": "cdc-sleep-health",
+        "sourceName": "CDC sleep health information",
+        "url": "https://www.cdc.gov/sleep/about_sleep/sleep_hygiene.html",
+        "content": "CDC sleep-health information describes consistent routines and a supportive sleep environment as practical education topics. Use this to enrich teaching context without introducing a new required treatment."
+      }
+    ],
+    "infection-prevention-safety-01": [
+      {
+        "sourceId": "cdc-hand-hygiene",
+        "sourceName": "CDC hand hygiene guidance",
+        "url": "https://www.cdc.gov/clean-hands/about/index.html",
+        "content": "CDC hand-hygiene guidance emphasizes cleaning hands at appropriate points in care and reducing spread of infection. It may enrich workflow cues, while the student notes remain the authority for the safety answer."
+      }
+    ],
+    "delegation-scope-safety-01": [
+      {
+        "sourceId": "ncsbn-delegation",
+        "sourceName": "NCSBN nursing practice resources",
+        "url": "https://www.ncsbn.org/nursing-regulation/practice.page",
+        "content": "NCSBN nursing-practice resources describe accountability, role clarity, and supervision in nursing care. These details may enrich delegation workflow but cannot introduce a new scope rule absent from the notes."
+      }
+    ]
+  }
+}

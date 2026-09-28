@@ -312,7 +312,10 @@ class Handler(SimpleHTTPRequestHandler):
                     'text': source_text,
                     'structuredSections': module.get('structured_sections') if isinstance(module.get('structured_sections'), list) else [],
                 }]
-                generated, generation = generator.generate(sources, requested)
+                requested_exemplars = body.get('use_exemplars') if isinstance(body.get('use_exemplars'), bool) else None
+                generated, generation = generator.generate(
+                    sources, requested, use_exemplars=requested_exemplars,
+                )
                 existing_rows = store.list_question_bank_questions(module_id)
                 existing_stems = {str(row.get('normalized_stem') or normalise_question_stem(row.get('stem'))) for row in existing_rows}
                 seen = set(existing_stems)
@@ -404,7 +407,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self._json({'error': 'AI question generation is not configured. Set STUDYWELL_API_KEY and restart the server.'}, 503)
                 return
             try:
-                items, generation = generator.generate(sources, count)
+                requested_exemplars = body.get('use_exemplars') if isinstance(body.get('use_exemplars'), bool) else None
+                items, generation = generator.generate(
+                    sources, count, use_exemplars=requested_exemplars,
+                )
                 self._json({'status': 'ready', 'items': items, 'generation_mode': 'hikari', 'pipeline': generator.pipeline_info(), 'generation': generation})
             except Exception as exc:
                 self._json({'error': str(exc), 'validation': {'passed': False}}, 422)

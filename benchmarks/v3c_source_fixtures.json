@@ -1,0 +1,250 @@
+{
+  "schema_version": "v3c-source-fixtures-1",
+  "fixture_kind": "source_cases",
+  "cases": [
+    {
+      "case_id": "hearing-multiple-interventions-01",
+      "source": {
+        "sourceId": "src-hearing-01",
+        "text": "For a patient with hearing difficulty, reduce excessive environmental noise, face the patient when speaking, keep the lips visible, and speak clearly at a normal pace. Hearing aids or other assistive devices may amplify sound when prescribed or available. Rephrase a message when the patient does not understand it."
+      },
+      "expectations": {
+        "concepts": ["hearing communication", "environmental barriers", "assistive devices"],
+        "task_types": ["initial_action", "intervention", "teaching"],
+        "known_risk_flags": ["multiple_valid_interventions", "needs_decision_boundary", "unsupported_device_assumption"],
+        "notes": "A strong item must identify a specific goal or priority so noise reduction, positioning, communication technique, and amplification are not treated as interchangeable answers."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "copd-respiratory-distress-01",
+      "source": {
+        "sourceId": "src-copd-01",
+        "text": "A patient with chronic obstructive pulmonary disease may show increasing work of breathing, pursed-lip breathing, restlessness, and difficulty speaking in complete sentences when respiratory status worsens. The nurse assesses breathing effort and mental status, positions the patient upright, checks oxygen equipment, and follows the prescribed oxygen and escalation protocol."
+      },
+      "expectations": {
+        "concepts": ["respiratory distress", "work of breathing", "oxygen safety"],
+        "task_types": ["priority", "initial_action", "assessment", "safety"],
+        "known_risk_flags": ["first_action", "unsupported_oxygen_order", "cue_mapping"],
+        "notes": "A strong item should connect observable respiratory cues to a prioritized nursing action without inventing a saturation value, medication order, or disease complication."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "cardiovascular-assessment-01",
+      "source": {
+        "sourceId": "src-cardiovascular-01",
+        "text": "During cardiovascular assessment, new chest pressure accompanied by pallor, diaphoresis, or shortness of breath requires focused assessment and prompt escalation according to the clinical setting. The nurse compares the current findings with the patient's baseline, obtains the vital signs that are ordered or available, and observes perfusion and level of consciousness."
+      },
+      "expectations": {
+        "concepts": ["cardiovascular cues", "perfusion assessment", "escalation"],
+        "task_types": ["assessment", "priority", "expected_unexpected"],
+        "known_risk_flags": ["cue_mapping", "false_specificity", "priority_boundary"],
+        "notes": "A strong item should ask the nurse to interpret a cluster of cues or choose an assessment priority rather than ask for a definition of chest pressure."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "neurologic-assessment-01",
+      "source": {
+        "sourceId": "src-neuro-01",
+        "text": "A sudden change in facial symmetry, unilateral weakness, new difficulty speaking, or a marked change in level of consciousness is an unexpected neurologic finding. The nurse notes the time the change was recognized, performs a focused neurologic assessment within scope, maintains safety, and activates the required urgent communication pathway."
+      },
+      "expectations": {
+        "concepts": ["acute neurologic change", "time-sensitive assessment", "patient safety"],
+        "task_types": ["assessment", "priority", "expected_unexpected", "initial_action"],
+        "known_risk_flags": ["time_sensitivity", "unsupported_diagnosis", "escalation_sequence"],
+        "notes": "A strong item should use the documented cues and time recognition as the decision boundary without naming an unsupported diagnosis or adding a treatment protocol."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "medication-safety-01",
+      "source": {
+        "sourceId": "src-medication-safety-01",
+        "text": "Before administering a medication, the nurse uses two patient identifiers, compares the medication label with the order, checks documented allergies, and clarifies a mismatch before proceeding. A patient question, an unfamiliar package, or an incomplete order is a reason to pause and verify rather than guess."
+      },
+      "expectations": {
+        "concepts": ["medication verification", "allergy safety", "order mismatch"],
+        "task_types": ["safety", "initial_action", "teaching"],
+        "known_risk_flags": ["sequence_order", "invented_medication", "unsafe_guessing"],
+        "notes": "A strong item should define which verification step comes first or which action prevents an error; it should not invent a drug, dose, or laboratory result."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "inhaler-patient-teaching-01",
+      "source": {
+        "sourceId": "src-inhaler-teaching-01",
+        "text": "When teaching inhaler use, the nurse demonstrates the prescribed technique in small steps, asks the patient to return-demonstrate, and corrects errors. For an inhaled corticosteroid, the patient is taught to rinse the mouth after use when that instruction is part of the prescribed teaching plan. Understanding is evaluated by observing the patient's technique rather than asking only whether the patient understands."
+      },
+      "expectations": {
+        "concepts": ["inhaler technique", "return demonstration", "teaching evaluation"],
+        "task_types": ["teaching", "evaluation", "safety"],
+        "known_risk_flags": ["teaching_vs_assessment", "invented_device", "single_best_teaching_action"],
+        "notes": "A strong item should distinguish explanation from return demonstration or evaluation and should preserve the conditional wording about the prescribed teaching plan."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "fall-risk-first-action-01",
+      "source": {
+        "sourceId": "src-fall-risk-01",
+        "text": "A patient who is weak and reports dizziness when standing has an increased fall risk. Immediate environmental measures include keeping the bed in a low position, ensuring the call light is within reach, removing clutter from the walking path, and assisting with transfers according to the care plan. The nurse reassesses symptoms before encouraging independent ambulation."
+      },
+      "expectations": {
+        "concepts": ["fall prevention", "dizziness", "safe transfer"],
+        "task_types": ["priority", "initial_action", "safety", "assessment"],
+        "known_risk_flags": ["multiple_valid_safety_actions", "first_action", "unsafe_independence"],
+        "notes": "A strong item must specify the immediate risk or ask for the first action; otherwise several environmental interventions are defensible."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "postoperative-expected-unexpected-01",
+      "source": {
+        "sourceId": "src-postoperative-01",
+        "text": "After a procedure, mild incisional discomfort and fatigue can be expected findings when they are stable and improving. New shortness of breath, rapidly increasing wound drainage, sudden confusion, or uncontrolled pain are unexpected changes that require focused assessment and communication according to the postoperative plan."
+      },
+      "expectations": {
+        "concepts": ["postoperative assessment", "expected findings", "unexpected change"],
+        "task_types": ["expected_unexpected", "assessment", "priority"],
+        "known_risk_flags": ["expected_vs_unexpected", "unsupported_complication", "trend_interpretation"],
+        "notes": "A strong item should ask the learner to identify an unexpected trend or finding and avoid turning the source into a simple vocabulary question."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "definition-heavy-source-01",
+      "source": {
+        "sourceId": "src-definitions-01",
+        "text": "Acute describes a problem with a sudden or short-term course. Chronic describes a problem that persists over a longer period. A symptom is a patient-reported experience, while a sign is an observable finding. Assessment is the organized collection and interpretation of patient information."
+      },
+      "expectations": {
+        "concepts": ["acute and chronic", "signs and symptoms", "assessment"],
+        "task_types": ["assessment", "expected_unexpected"],
+        "known_risk_flags": ["recall_only", "insufficient_scenario", "definition_restatement"],
+        "notes": "The source is intentionally definition-heavy. A strong generator should either build a modest supported scenario or reject the request rather than create a title or definition recall item."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "headings-exam-objectives-01",
+      "source": {
+        "sourceId": "src-headings-01",
+        "text": "Module title: Sensory Alterations. Exam objectives: identify common communication barriers and describe basic safety measures. Section heading: Hearing. Key terms: hearing aid, environmental noise, communication. The lecture notes then state that the nurse reduces avoidable noise and faces the patient when speaking.",
+        "chunks": [
+          {"sectionId": "heading", "heading": "Exam objectives", "paragraphs": ["identify common communication barriers and describe basic safety measures"]},
+          {"sectionId": "hearing", "heading": "Hearing", "paragraphs": ["The nurse reduces avoidable noise and faces the patient when speaking."]}
+        ]
+      },
+      "expectations": {
+        "concepts": ["hearing communication", "course structure filtering"],
+        "task_types": ["intervention", "safety"],
+        "known_risk_flags": ["metadata_heading_question", "recall_only", "heading_evidence"],
+        "notes": "A strong generator must ignore module metadata and use the clinical lecture sentence if it can support a patient-care decision."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "insufficient-clinical-context-01",
+      "source": {
+        "sourceId": "src-insufficient-context-01",
+        "text": "Hearing impairment can affect communication. Patients may benefit from clear speech and a quiet environment. Assistive devices can be used when appropriate."
+      },
+      "expectations": {
+        "concepts": ["hearing impairment", "communication support"],
+        "task_types": ["intervention", "teaching"],
+        "known_risk_flags": ["insufficient_clinical_context", "multiple_valid_interventions", "invented_patient_cues"],
+        "notes": "The source does not supply a patient situation or priority. A strong generator should narrow the task using only supported information or reject a request that requires invented acuity."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "pain-related-interventions-01",
+      "source": {
+        "sourceId": "src-pain-interventions-01",
+        "text": "Pain management may include positioning for comfort, reducing environmental stimulation, relaxation or breathing techniques, prescribed analgesia, and reassessment after an intervention. The best nursing action depends on the patient's current pain report, safety status, prescribed plan, and the goal of the intervention."
+      },
+      "expectations": {
+        "concepts": ["pain management", "comfort positioning", "reassessment"],
+        "task_types": ["intervention", "initial_action", "evaluation", "priority"],
+        "known_risk_flags": ["multiple_valid_interventions", "missing_goal", "invented_medication"],
+        "notes": "A strong item must specify the desired goal or sequence, such as reassessment after an intervention, because several listed actions can be appropriate."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "sleep-hygiene-teaching-01",
+      "source": {
+        "sourceId": "src-sleep-teaching-01",
+        "text": "Sleep hygiene teaching includes keeping a consistent sleep schedule, limiting stimulating activities before bedtime, making the sleep environment comfortable, and discussing daytime habits that interfere with rest. The nurse asks the patient which barrier is most difficult and agrees on one realistic change to evaluate at follow-up."
+      },
+      "expectations": {
+        "concepts": ["sleep hygiene", "patient-centered teaching", "follow-up evaluation"],
+        "task_types": ["teaching", "evaluation", "assessment"],
+        "known_risk_flags": ["multiple_valid_teaching_actions", "patient_preference", "generic_advice"],
+        "notes": "A strong item should use the patient's identified barrier or ask how learning will be evaluated rather than list every sleep recommendation as one answer."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "infection-prevention-safety-01",
+      "source": {
+        "sourceId": "src-infection-safety-01",
+        "text": "Infection prevention begins with hand hygiene before and after patient contact and after contact with potentially contaminated materials. Gloves are selected for the anticipated exposure but do not replace hand hygiene. The nurse keeps clean supplies separate from used materials and follows the facility's isolation instructions when they apply."
+      },
+      "expectations": {
+        "concepts": ["hand hygiene", "personal protective equipment", "clean separation"],
+        "task_types": ["safety", "initial_action", "teaching"],
+        "known_risk_flags": ["sequence_boundary", "gloves_replace_hand_hygiene", "unsupported_isolation_type"],
+        "notes": "A strong item should make the exposure or sequence clear and should not invent a named organism or isolation category absent from the source."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    },
+    {
+      "case_id": "delegation-scope-safety-01",
+      "source": {
+        "sourceId": "src-delegation-01",
+        "text": "The registered nurse matches delegated tasks to the team member's verified role, training, and patient stability. A task requiring initial assessment, clinical judgment, or evaluation remains with the nurse. The nurse gives clear instructions, confirms understanding, and follows up on the reported result."
+      },
+      "expectations": {
+        "concepts": ["delegation", "scope of practice", "follow-up evaluation"],
+        "task_types": ["safety", "assessment", "evaluation", "priority"],
+        "known_risk_flags": ["scope_invention", "missing_patient_stability", "multiple_valid_steps"],
+        "notes": "A strong item should provide enough role and patient-stability context to distinguish delegation from a task that requires nursing judgment."
+      },
+      "settings": {"count": 1, "batch_size": 10, "model": "gpt-5.6-sol"},
+      "direct": {"items": [], "telemetry": {}},
+      "blueprint": {"items": [], "telemetry": {}}
+    }
+  ]
+}

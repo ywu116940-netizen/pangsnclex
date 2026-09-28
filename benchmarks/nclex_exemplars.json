@@ -1,0 +1,445 @@
+{
+  "schema_version": "nclex-exemplars-1",
+  "library_kind": "benchmark_development_only",
+  "description": "Original synthetic item-design exemplars for offline benchmark work. These are structural teaching examples, not an NCLEX question bank or medical authority.",
+  "pattern_catalog": [
+    {"itemStyle": "expected_finding", "nursingTask": "Recognize a normal or expected assessment result.", "decisionBoundary": "Choose the finding that is stable and consistent with the stated assessment context.", "distractorStrategy": "Use realistic abnormal or worsening findings from the same body system.", "uniquenessRationale": "Only one option matches the requested expected state; each distractor represents a change that warrants further assessment."},
+    {"itemStyle": "cue_to_condition", "nursingTask": "Interpret a meaningful cluster of cues and identify the supported condition or nursing concern.", "decisionBoundary": "Select the concern best explained by all supplied cues without adding an unprovided diagnosis.", "distractorStrategy": "Offer nearby but less-supported conditions and stable states.", "uniquenessRationale": "The keyed concern accounts for the cue pattern while alternatives omit or contradict key cues."},
+    {"itemStyle": "function_mechanism", "nursingTask": "Explain the function of a structure or the reason for a nursing process.", "decisionBoundary": "Select the statement that describes the named structure or process at the level supported by the lesson.", "distractorStrategy": "Use common role confusions, adjacent structures, or unrelated nursing purposes.", "uniquenessRationale": "Only one mechanism directly answers the named function; distractors describe different functions or tasks."},
+    {"itemStyle": "patient_teaching", "nursingTask": "Choose education that helps a patient meet a stated goal.", "decisionBoundary": "Select the teaching action most directly connected to the patient's stated barrier or goal.", "distractorStrategy": "Use plausible advice that is mistimed, unsupported, or aimed at a different goal.", "uniquenessRationale": "The keyed teaching point changes the stated behavior or barrier; distractors do not address that target as directly."},
+    {"itemStyle": "further_teaching", "nursingTask": "Detect a patient statement that reveals a misunderstanding.", "decisionBoundary": "Choose the one statement that conflicts with the specified teaching plan.", "distractorStrategy": "Make the remaining patient statements accurate and behaviorally specific.", "uniquenessRationale": "Only one statement contradicts the lesson; the others demonstrate understanding without relying on wording tricks."},
+    {"itemStyle": "nursing_intervention", "nursingTask": "Select a nursing action that addresses a defined patient problem or goal.", "decisionBoundary": "Choose the intervention that is appropriate for the stated situation and requested time or outcome.", "distractorStrategy": "Use realistic actions that are less timely, target a different problem, or introduce an unsafe assumption.", "uniquenessRationale": "The keyed action best fits the requested goal and cues; alternatives may be useful elsewhere but miss this boundary."},
+    {"itemStyle": "priority_best_action", "nursingTask": "Rank competing nursing actions and select the first or highest-priority step.", "decisionBoundary": "Choose the action that immediately protects safety or addresses the time-sensitive cue before lower-priority work.", "distractorStrategy": "Use reasonable later actions, documentation, education, or preparation that should follow the first step.", "uniquenessRationale": "Urgency and sequence make one action first even though other options may be appropriate later."},
+    {"itemStyle": "nursing_problem_identification", "nursingTask": "Name the primary nursing problem supported by the documented patient cues.", "decisionBoundary": "Select the problem statement that is directly supported, without inferring an unconfirmed medical diagnosis.", "distractorStrategy": "Use related but unsupported problems, diagnoses, or outcomes.", "uniquenessRationale": "The keyed problem is the only label directly evidenced by the cues at the requested level of certainty."}
+  ],
+  "item_styles": [
+    {
+      "id": "expected-finding-01",
+      "itemStyle": "expected_finding",
+      "exampleKind": "strong",
+      "responseFormat": "SATA",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "expected_finding",
+      "designPrinciples": ["Name the assessment domain", "Ask for findings that are independently expected", "Use plausible abnormal findings as distractors", "Allow any number of correct SATA options"],
+      "antiPatterns": ["Mixing unrelated body systems", "Making every option correct", "Using a title instead of an assessment task"],
+      "syntheticExample": {
+        "stem": "During a routine skin assessment of an adult patient, which findings represent a stable expected assessment? Choose every option that is supported.",
+        "options": ["Warm, intact skin", "A new open draining area", "Even color for the patient's baseline", "A rapidly enlarging bruise", "Skin that is dry but without breaks"],
+        "correctAnswer": ["Warm, intact skin", "Even color for the patient's baseline", "Skin that is dry but without breaks"]
+      }
+    },
+    {
+      "id": "expected-finding-02",
+      "itemStyle": "expected_finding",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "moderate",
+      "stemPattern": "expected_finding",
+      "designPrinciples": ["Give a focused context", "Distinguish stable expected findings from urgent changes", "Keep the requested finding explicit", "Avoid adding unsupported measurements"],
+      "antiPatterns": ["Testing a diagnosis instead of a finding", "Using unexplained numeric cutoffs", "Hiding the task in a long story"],
+      "syntheticExample": {
+        "stem": "A patient is two hours after a routine procedure and reports mild discomfort that improves after repositioning. Which finding is most consistent with an expected recovery?",
+        "options": ["Mild incisional tenderness that is improving", "Sudden shortness of breath", "Rapidly increasing wound drainage", "New inability to stay awake"],
+        "correctAnswer": "Mild incisional tenderness that is improving"
+      }
+    },
+    {
+      "id": "expected-finding-03",
+      "itemStyle": "expected_finding",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "expected_finding",
+      "designPrinciples": ["Use a clear assessment target", "Include a meaningful distinction", "Keep options parallel", "Support the answer in the assigned notes"],
+      "antiPatterns": ["Asking what a heading means", "Using an answer that repeats the stem", "Adding an unrelated diagnosis"],
+      "syntheticExample": {
+        "stem": "Which finding would the nurse expect when a patient has maintained adequate hydration during a routine shift?",
+        "options": ["Moist oral mucosa", "New confusion", "Marked dizziness on standing", "Very dark urine with thirst"],
+        "correctAnswer": "Moist oral mucosa"
+      }
+    },
+    {
+      "id": "cue-to-condition-01",
+      "itemStyle": "cue_to_condition",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "minimal",
+      "stemPattern": "identify_condition_from_cues",
+      "designPrinciples": ["Use a specific cue cluster", "Ask what condition the cues suggest", "Make alternatives clinically plausible", "Avoid unsupported tests or diagnoses"],
+      "antiPatterns": ["Using one vague symptom", "Making the correct answer the only medical term", "Testing memorized abbreviations"],
+      "syntheticExample": {
+        "stem": "A patient has new facial asymmetry, weakness on one side, and difficulty speaking. Which problem should the nurse recognize as requiring urgent neurologic assessment?",
+        "options": ["Acute neurologic change", "Chronic sleep difficulty", "Mild exercise intolerance", "Routine nutrition concern"],
+        "correctAnswer": "Acute neurologic change"
+      }
+    },
+    {
+      "id": "cue-to-condition-02",
+      "itemStyle": "cue_to_condition",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "clinical_judgment",
+      "scenarioDensity": "moderate",
+      "stemPattern": "identify_condition_from_cues",
+      "designPrinciples": ["Require interpretation rather than keyword matching", "Use cues that change the nursing concern", "Keep the condition at the source-supported level", "Avoid turning a cue into an unsupported final diagnosis"],
+      "antiPatterns": ["Adding an unprovided laboratory value", "Asking for a treatment protocol", "Including irrelevant demographic details"],
+      "syntheticExample": {
+        "stem": "A patient with chronic lung disease is restless, uses pursed-lip breathing, and can no longer speak in complete sentences. Which condition should the nurse identify first?",
+        "options": ["Worsening respiratory distress", "Improved gas exchange", "Stable exercise tolerance", "Resolved airway concern"],
+        "correctAnswer": "Worsening respiratory distress"
+      }
+    },
+    {
+      "id": "cue-to-condition-03",
+      "itemStyle": "cue_to_condition",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "identify_condition_from_cues",
+      "designPrinciples": ["Connect multiple cues", "Use a specific nursing concern", "Make distractors defensible but distinct", "Avoid unsupported certainty"],
+      "antiPatterns": ["Asking which condition is appropriate", "Providing no patient cue", "Using an answer that simply copies a lecture heading"],
+      "syntheticExample": {
+        "stem": "Which condition is appropriate?",
+        "options": ["Respiratory distress", "Cardiovascular concern", "Neurologic concern", "Other"],
+        "correctAnswer": "Respiratory distress"
+      }
+    },
+    {
+      "id": "function-mechanism-01",
+      "itemStyle": "function_mechanism",
+      "exampleKind": "strong",
+      "responseFormat": "SATA",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "function_mechanism",
+      "designPrinciples": ["Ask about one structure or process", "Make each option independently true or false", "Use mechanism-level wording", "Include misconception-based distractors"],
+      "antiPatterns": ["Combining several organs in one stem", "Making options depend on each other", "Using treatment choices instead of functions"],
+      "syntheticExample": {
+        "stem": "Which statements describe how the kidneys support homeostasis? Choose every option that is supported.",
+        "options": ["They help regulate fluid balance", "They remove selected waste products in urine", "They pump oxygenated blood to the body", "They produce digestive enzymes in the stomach", "They participate in blood-pressure regulation"],
+        "correctAnswer": ["They help regulate fluid balance", "They remove selected waste products in urine", "They participate in blood-pressure regulation"]
+      }
+    },
+    {
+      "id": "function-mechanism-02",
+      "itemStyle": "function_mechanism",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "minimal",
+      "stemPattern": "function_mechanism",
+      "designPrinciples": ["Use a simple mechanism scenario", "Ask what action accomplishes", "Keep the answer at the level taught in notes", "Avoid trivia unrelated to nursing care"],
+      "antiPatterns": ["Requiring an obscure dosage", "Using a definition-only title", "Adding a mechanism not supplied by the source"],
+      "syntheticExample": {
+        "stem": "Why does the nurse ask a patient to return-demonstrate inhaler technique after teaching?",
+        "options": ["To evaluate whether the patient can perform the technique", "To replace the prescribed medication", "To determine the patient's blood type", "To avoid explaining the steps"],
+        "correctAnswer": "To evaluate whether the patient can perform the technique"
+      }
+    },
+    {
+      "id": "function-mechanism-03",
+      "itemStyle": "function_mechanism",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "function_mechanism",
+      "designPrinciples": ["Name the structure", "Use parallel mechanism statements", "Include one best mechanism", "Keep the scope narrow"],
+      "antiPatterns": ["Asking for a broad chapter summary", "Using only a heading", "Making distractors unrelated to the structure"],
+      "syntheticExample": {
+        "stem": "What is the primary purpose of hand hygiene before patient contact?",
+        "options": ["Reduce transfer of microorganisms", "Improve the patient's appetite", "Measure the patient's temperature", "Replace all environmental cleaning"],
+        "correctAnswer": "Reduce transfer of microorganisms"
+      }
+    },
+    {
+      "id": "patient-teaching-01",
+      "itemStyle": "patient_teaching",
+      "exampleKind": "strong",
+      "responseFormat": "SATA",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "minimal",
+      "stemPattern": "appropriate_patient_education",
+      "designPrinciples": ["Frame education around a patient goal", "Make each teaching action independently evaluable", "Use common misconceptions as distractors", "Do not require a fixed number of SATA answers"],
+      "antiPatterns": ["Giving contradictory instructions", "Including actions unrelated to the goal", "Treating patient preference as a wrong answer"],
+      "syntheticExample": {
+        "stem": "A patient learning to prevent constipation asks which habits to try. Which teaching points should the nurse include? Choose every option that is supported.",
+        "options": ["Increase activity as tolerated", "Include fiber-rich foods when allowed", "Ignore the urge to have a bowel movement", "Drink fluids when not restricted", "Use a laxative every day without guidance"],
+        "correctAnswer": ["Increase activity as tolerated", "Include fiber-rich foods when allowed", "Drink fluids when not restricted"]
+      }
+    },
+    {
+      "id": "patient-teaching-02",
+      "itemStyle": "patient_teaching",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "moderate",
+      "stemPattern": "appropriate_patient_education",
+      "designPrinciples": ["Ask for the most relevant education", "Use the patient's stated barrier", "Keep one teaching point best", "Prefer observable behavior"],
+      "antiPatterns": ["Asking whether the patient likes teaching", "Using a list with several combined actions", "Adding a device not in the source"],
+      "syntheticExample": {
+        "stem": "A patient who is learning a home wound-care routine says the written steps feel confusing. Which teaching point is most useful?",
+        "options": ["Use the steps in order and demonstrate the routine back to the nurse", "Skip steps that seem inconvenient", "Change the supplies without checking the plan", "Wait until the next visit to mention questions"],
+        "correctAnswer": "Use the steps in order and demonstrate the routine back to the nurse"
+      }
+    },
+    {
+      "id": "patient-teaching-03",
+      "itemStyle": "patient_teaching",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "appropriate_patient_education",
+      "designPrinciples": ["Tie teaching to a patient need", "Use a behavioral outcome", "Keep alternatives plausible", "Avoid combined answer bundles"],
+      "antiPatterns": ["Asking which statement is appropriate without a goal", "Keying a bundle of unrelated actions", "Testing a definition instead of education"],
+      "syntheticExample": {
+        "stem": "Which intervention is appropriate for a patient at risk for skin breakdown?",
+        "options": ["Inspect pressure areas and change position according to the care plan", "Leave damp linens in place until rounds are complete", "Massage reddened skin vigorously", "Keep the patient in one position to avoid disturbance"],
+        "correctAnswer": "Inspect pressure areas and change position according to the care plan"
+      }
+    },
+    {
+      "id": "further-teaching-01",
+      "itemStyle": "further_teaching",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "minimal",
+      "stemPattern": "need_for_further_teaching",
+      "designPrinciples": ["Ask what statement reveals a misconception", "Make the other statements accurate", "Use the patient's voice", "Keep one clearly incorrect teaching statement"],
+      "antiPatterns": ["Using a trick word", "Making two statements incorrect", "Asking for the best intervention instead"],
+      "syntheticExample": {
+        "stem": "Which statement by a patient learning inhaler technique indicates a need for further teaching?",
+        "options": ["I will demonstrate the steps back to the nurse", "I will follow the prescribed sequence", "I can skip the mouth-rinsing instruction when it is part of my plan", "I will ask questions when I am unsure"],
+        "correctAnswer": "I can skip the mouth-rinsing instruction when it is part of my plan"
+      }
+    },
+    {
+      "id": "further-teaching-02",
+      "itemStyle": "further_teaching",
+      "exampleKind": "strong",
+      "responseFormat": "SATA",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "moderate",
+      "stemPattern": "need_for_further_teaching",
+      "designPrinciples": ["Use independent statements", "Identify misconceptions rather than punish wording", "Keep all options within the same teaching topic", "Allow multiple needs for further teaching"],
+      "antiPatterns": ["Mixing correct and incorrect domains", "Making the answer depend on tone", "Using an obviously silly distractor"],
+      "syntheticExample": {
+        "stem": "Which patient comments reveal more teaching is needed about medication safety? Choose every option that is concerning.",
+        "options": ["I will use two identifiers before the medication is given", "I will pause if the label does not match the order", "I can guess what an unfamiliar package contains", "I will mention a documented allergy", "I do not need to ask about an incomplete order"],
+        "correctAnswer": ["I can guess what an unfamiliar package contains", "I do not need to ask about an incomplete order"]
+      }
+    },
+    {
+      "id": "further-teaching-03",
+      "itemStyle": "further_teaching",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "need_for_further_teaching",
+      "designPrinciples": ["Use a specific misconception", "Keep one answer clearly in need of correction", "Use parallel patient statements", "Tie all options to the same lesson"],
+      "antiPatterns": ["Asking for a title or definition", "Making the correct answer a random fact", "Using four unrelated topics"],
+      "syntheticExample": {
+        "stem": "Which patient comment shows that the plan was misunderstood?",
+        "options": ["I will ask questions", "I will follow the plan", "I need teaching", "I will use the call light"],
+        "correctAnswer": "I need teaching"
+      }
+    },
+    {
+      "id": "nursing-intervention-01",
+      "itemStyle": "nursing_intervention",
+      "exampleKind": "strong",
+      "responseFormat": "SATA",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "moderate",
+      "stemPattern": "select_correct_interventions",
+      "designPrinciples": ["Specify the communication goal", "Make each intervention independently appropriate", "Use common but unsafe alternatives as distractors", "Keep the scenario supported by notes"],
+      "antiPatterns": ["Treating all interventions as interchangeable", "Keying a multi-action bundle as one option", "Adding an unavailable device"],
+      "syntheticExample": {
+        "stem": "A patient with limited mobility is preparing to transfer from bed to chair. Which nursing actions support a safe transfer? Choose every option that is appropriate.",
+        "options": ["Explain the transfer before starting", "Lock the bed and chair as appropriate", "Ask the patient to stand without assistance to test strength", "Clear the path", "Rush the movement before the patient is ready"],
+        "correctAnswer": ["Explain the transfer before starting", "Lock the bed and chair as appropriate", "Clear the path"]
+      }
+    },
+    {
+      "id": "nursing-intervention-02",
+      "itemStyle": "nursing_intervention",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "clinical_judgment",
+      "scenarioDensity": "high",
+      "stemPattern": "best_nursing_action",
+      "designPrinciples": ["Provide cues that change the action", "Ask for one intervention tied to a goal", "Use sequence or priority to narrow choices", "Avoid unsupported treatment orders"],
+      "antiPatterns": ["Listing every reasonable intervention", "Using a diagnosis not in the source", "Making the correct option a long bundle"],
+      "syntheticExample": {
+        "stem": "A weak patient reports dizziness while standing and reaches for a cluttered walking path. Which action should the nurse take first to reduce the immediate fall risk?",
+        "options": ["Clear the path and assist the patient to a safe position", "Encourage the patient to walk independently", "Leave the room to find a family member", "Ask the patient to practice standing repeatedly"],
+        "correctAnswer": "Clear the path and assist the patient to a safe position"
+      }
+    },
+    {
+      "id": "nursing-intervention-03",
+      "itemStyle": "nursing_intervention",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "moderate",
+      "stemPattern": "best_nursing_action",
+      "designPrinciples": ["Name the patient goal", "Ask for one action", "Use plausible distractors", "Keep each option comparable"],
+      "antiPatterns": ["Vague intervention wording", "Multiple defensible answers", "Keying several actions joined by and"],
+      "syntheticExample": {
+        "stem": "Which intervention is appropriate for a patient with communication difficulty?",
+        "options": ["Reduce noise", "Face the patient", "Use written support", "Reduce noise, face the patient, use written support, and repeat everything"],
+        "correctAnswer": "Reduce noise, face the patient, use written support, and repeat everything"
+      }
+    },
+    {
+      "id": "priority-best-action-01",
+      "itemStyle": "priority_best_action",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "clinical_judgment",
+      "scenarioDensity": "high",
+      "stemPattern": "best_nursing_action",
+      "designPrinciples": ["State the immediate risk", "Use first-action wording", "Give cues that distinguish urgency", "Make alternatives reasonable but lower priority"],
+      "antiPatterns": ["Asking for every appropriate intervention", "Using an emergency label unsupported by cues", "Making one option much longer"],
+      "syntheticExample": {
+        "stem": "A patient develops new facial asymmetry and difficulty speaking while walking to the bathroom. What should the nurse do first?",
+        "options": ["Keep the patient safe, note when the change was recognized, and activate the urgent assessment pathway", "Offer a snack and reassess at the next routine round", "Teach the patient about long-term exercise", "Document the finding after completing other patients' care"],
+        "correctAnswer": "Keep the patient safe, note when the change was recognized, and activate the urgent assessment pathway"
+      }
+    },
+    {
+      "id": "priority-best-action-02",
+      "itemStyle": "priority_best_action",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "clinical_judgment",
+      "scenarioDensity": "moderate",
+      "stemPattern": "best_nursing_action",
+      "designPrinciples": ["Define the competing priorities", "Ask for the immediate safety action", "Use source-supported workflow", "Avoid invented numbers or medications"],
+      "antiPatterns": ["Relying on a diagnosis label alone", "Using a vague what-should-the-nurse-do stem", "Making distractors absurd"],
+      "syntheticExample": {
+        "stem": "Before a medication is administered, the label does not match the electronic order. Which action is the priority?",
+        "options": ["Pause and clarify the mismatch before giving the medication", "Give the medication and document the difference", "Ask the patient to choose which label is correct", "Discard the medication without checking the order"],
+        "correctAnswer": "Pause and clarify the mismatch before giving the medication"
+      }
+    },
+    {
+      "id": "priority-best-action-03",
+      "itemStyle": "priority_best_action",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "high",
+      "stemPattern": "best_nursing_action",
+      "designPrinciples": ["Identify the time-sensitive cue", "Ask for the first action", "Keep the scenario focused", "Use parallel options"],
+      "antiPatterns": ["Long irrelevant backstory", "Several answers that are all first", "Using a combined answer that hides the decision boundary"],
+      "syntheticExample": {
+        "stem": "A patient has many chronic conditions, several visitors, a detailed history, and new dizziness. What should the nurse do?",
+        "options": ["Assess the patient", "Check the call light", "Review the history", "Assess the patient, check the call light, review the history, notify the provider, and document"],
+        "correctAnswer": "Assess the patient, check the call light, review the history, notify the provider, and document"
+      }
+    },
+    {
+      "id": "nursing-problem-identification-01",
+      "itemStyle": "nursing_problem_identification",
+      "exampleKind": "strong",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "application",
+      "scenarioDensity": "minimal",
+      "stemPattern": "identify_primary_problem",
+      "designPrinciples": ["Describe observable patient impact", "Ask for the primary nursing problem", "Keep labels at the source-supported level", "Use distinct plausible alternatives"],
+      "antiPatterns": ["Naming a medical diagnosis without cues", "Using a symptom as the only answer", "Asking for all problems at once"],
+      "syntheticExample": {
+        "stem": "A patient with repeated vomiting has dry mucous membranes and reports dizziness when standing. Which nursing problem is most directly supported by these cues?",
+        "options": ["Deficient fluid volume", "Impaired social interaction", "Disturbed body image", "Ineffective airway clearance"],
+        "correctAnswer": "Deficient fluid volume"
+      }
+    },
+    {
+      "id": "nursing-problem-identification-02",
+      "itemStyle": "nursing_problem_identification",
+      "exampleKind": "strong",
+      "responseFormat": "SATA",
+      "cognitiveLevel": "clinical_judgment",
+      "scenarioDensity": "moderate",
+      "stemPattern": "identify_primary_problem",
+      "designPrinciples": ["Use cues that support nursing-problem statements", "Make options independently defensible or indefensible", "Avoid turning a problem into a diagnosis", "Keep the number of correct SATA options evidence-based"],
+      "antiPatterns": ["Choosing every possible problem", "Using unsupported risk labels", "Making the answer depend on terminology trivia"],
+      "syntheticExample": {
+        "stem": "A patient with new weakness and dizziness when standing needs a focused nursing assessment. Which nursing problems are supported by the documented cues? Choose every option that is supported.",
+        "options": ["Risk for falls", "Activity intolerance", "Confirmed cardiac disease", "Need for safe-transfer assistance", "Medication toxicity"],
+        "correctAnswer": ["Risk for falls", "Activity intolerance", "Need for safe-transfer assistance"]
+      }
+    },
+    {
+      "id": "nursing-problem-identification-03",
+      "itemStyle": "nursing_problem_identification",
+      "exampleKind": "anti",
+      "responseFormat": "single_choice",
+      "cognitiveLevel": "recognition",
+      "scenarioDensity": "minimal",
+      "stemPattern": "identify_primary_problem",
+      "designPrinciples": ["Use a patient-specific cue", "Ask for the primary nursing concern", "Keep labels parallel", "Do not infer unsupported diagnoses"],
+      "antiPatterns": ["No patient information", "A correct answer that is just the heading", "Distractors from unrelated systems"],
+      "syntheticExample": {
+        "stem": "A patient repeatedly coughs while drinking thin liquids and has a wet voice afterward. Which nursing problem should the nurse identify?",
+        "options": ["Risk for aspiration", "Readiness for enhanced sleep", "Impaired urinary elimination", "Chronic low self-esteem"],
+        "correctAnswer": "Risk for aspiration"
+      }
+    }
+  ],
+  "bad_to_repaired": [
+    {
+      "id": "repair-vague-intervention-01",
+      "problemType": "vague_intervention_stem",
+      "bad": {"stem": "Which action could help prevent skin breakdown?", "options": ["Inspect the skin", "Reposition the patient", "Keep linens dry", "Use every action at once"]},
+      "repaired": {"stem": "A patient has been in one position for several hours and the sacral area is at risk. Which action should the nurse take first to reduce the immediate pressure barrier?", "options": ["Reposition the patient according to the care plan", "Wait for a visible wound before acting", "Massage any reddened area vigorously", "Add extra layers without checking the skin"], "correctAnswer": "Reposition the patient according to the care plan"},
+      "lesson": "Name the patient cue and the decision boundary so several valid interventions are not interchangeable."
+    },
+    {
+      "id": "repair-multiple-defensible-01",
+      "problemType": "multiple_defensible_answers",
+      "bad": {"stem": "What should the nurse do for a patient who is dizzy while standing?", "options": ["Stay nearby", "Clear the path", "Offer assistance", "Check vital signs"]},
+      "repaired": {"stem": "A weak patient becomes dizzy while beginning a transfer. Which action is the priority to reduce the immediate fall risk?", "options": ["Assist the patient to a safe position", "Teach an exercise plan for next week", "Leave to retrieve paperwork", "Ask the patient to finish the transfer alone"], "correctAnswer": "Assist the patient to a safe position"},
+      "lesson": "A narrow goal and time horizon make one answer best without claiming other actions are never useful."
+    },
+    {
+      "id": "repair-overlong-scenario-01",
+      "problemType": "unnecessary_long_scenario",
+      "bad": {"stem": "A 72-year-old retired teacher who lives with a spouse, has four grandchildren, enjoys gardening, had breakfast at 7:15, and is wearing blue slippers is two hours after a procedure... Which finding is expected?", "options": ["Improving mild incisional discomfort", "New shortness of breath", "Rapid wound drainage", "Sudden confusion"]},
+      "repaired": {"stem": "Two hours after a procedure, which finding is expected when it is stable and improving?", "options": ["Mild incisional discomfort", "New shortness of breath", "Rapidly increasing wound drainage", "Sudden confusion"], "correctAnswer": "Mild incisional discomfort"},
+      "lesson": "Keep only cues that change the nursing decision; scenario density should serve the task."
+    },
+    {
+      "id": "repair-weak-distractors-01",
+      "problemType": "weak_distractors",
+      "bad": {"stem": "Which action supports safety?", "options": ["Reduce fall risk", "Do the right thing", "Help safely", "Ignore the patient"]},
+      "repaired": {"stem": "A weak patient reports dizziness when standing. Which action should the nurse take first?", "options": ["Assist the patient to a safe position and clear the path", "Encourage independent walking to build confidence", "Leave the patient standing while gathering supplies", "Ask the patient to repeat the transfer without assistance"], "correctAnswer": "Assist the patient to a safe position and clear the path"},
+      "lesson": "Distractors should be realistic nursing choices with a clear reason they are less safe or less timely."
+    },
+    {
+      "id": "repair-recall-title-01",
+      "problemType": "recall_only_title_definition",
+      "bad": {"stem": "What is sensory alteration?", "options": ["A change in sensory input", "A medication error", "A sleep problem", "A nutrition problem"]},
+      "repaired": {"stem": "A patient cannot follow spoken instructions when background noise is present. Which nursing concern should guide the initial communication assessment?", "options": ["A sensory communication barrier", "A confirmed neurologic diagnosis", "A nutrition deficit", "A medication reaction"], "correctAnswer": "A sensory communication barrier"},
+      "lesson": "Convert a definition into a modest supported patient situation without inventing findings."
+    },
+    {
+      "id": "repair-combined-key-01",
+      "problemType": "combined_multi_action_key",
+      "bad": {"stem": "Which action should the nurse take first before giving a medication?", "options": ["Use two identifiers", "Compare the label with the order", "Check allergies", "Use two identifiers, compare the label, check allergies, clarify any mismatch, and document"]},
+      "repaired": {"stem": "The medication label does not match the order. Which action should the nurse take before administration?", "options": ["Pause and clarify the mismatch", "Give the medication and document it", "Ask the patient to select the correct label", "Set the medication aside without checking the order"], "correctAnswer": "Pause and clarify the mismatch"},
+      "lesson": "Separate sequence decisions from a bundle of generally good actions; key one observable decision."
+    }
+  ]
+}
